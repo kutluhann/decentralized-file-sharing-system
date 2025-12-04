@@ -46,17 +46,20 @@ func id_test() {
 	}
 
 	if choice == 1 && privateKeyExists {
-		privateKey := id_tools.LoadPrivateKey()
+		privateKey, peerID := id_tools.LoadPrivateKey()
 		config.GetConfig().SetPrivateKey(privateKey)
+		config.GetConfig().SetPeerID(peerID)
 	} else {
 		fmt.Println("Generating new private key...")
 
-		privateKey := id_tools.GenerateNewPID()
-		id_tools.SavePrivateKey(privateKey)
+		privateKey, peerID := id_tools.GenerateNewPID()
+		config.GetConfig().SetPeerID(peerID)
 		config.GetConfig().SetPrivateKey(privateKey)
+		id_tools.SavePrivateKey(privateKey)
 
 	}
 
 	log.Default().Println("Public Key:", config.GetConfig().GetPrivateKey().PublicKey)
+	log.Default().Println("Peer ID:", config.GetConfig().GetPeerID())
 
 }

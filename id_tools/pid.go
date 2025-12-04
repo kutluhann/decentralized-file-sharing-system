@@ -1,10 +1,12 @@
 package id_tools
 
 import (
+	"crypto/sha256"
 	"log"
 	"os"
 
 	ecies "github.com/ecies/go/v2"
+	"github.com/kutluhann/decentralized-file-sharing-system/constants"
 )
 
 // constant for file storage path
@@ -13,14 +15,16 @@ const PrivateKeyFilePath = "private_key.pem"
 // typedef peerID as SHA256 type, it is not a string
 type PeerID [32]byte
 
-func GenerateNewPID() *ecies.PrivateKey {
+func GenerateNewPID() (*ecies.PrivateKey, PeerID) {
 	privateKey, err := ecies.GenerateKey()
 
 	if err != nil {
 		log.Fatal("Error generating ECIES private key:", err)
 	}
 
-	return privateKey
+	peerID := generatePeerIDFromPublicKey(privateKey.PublicKey)
+
+	return privateKey, peerID
 }
 
 func SavePrivateKey(key *ecies.PrivateKey) {
@@ -39,7 +43,7 @@ func SavePrivateKey(key *ecies.PrivateKey) {
 
 }
 
-func LoadPrivateKey() *ecies.PrivateKey {
+func LoadPrivateKey() (*ecies.PrivateKey, PeerID) {
 	file, err := os.Open(PrivateKeyFilePath)
 	if err != nil {
 		log.Fatal("Error opening private key file:", err)
@@ -55,6 +59,16 @@ func LoadPrivateKey() *ecies.PrivateKey {
 	}
 	privateKey := ecies.NewPrivateKeyFromBytes(keyBytes)
 
-	return privateKey
+	peerID := generatePeerIDFromPublicKey(privateKey.PublicKey)
 
+	return privateKey, peerID
+
+}
+
+func generatePeerIDFromPublicKey(pubKey *ecies.PublicKey) PeerID {
+	pubKeyHex := pubKey.Hex(false)
+	textToHash := pubKeyHex + constants.Salt
+	generatedPeerID := sha256.Sum256([]byte(textToHash))
+
+	return generatedPeerID
 }
