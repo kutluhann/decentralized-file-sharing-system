@@ -89,7 +89,7 @@ func CheckPublicKeyMatchesPeerID(pubKey *ecdsa.PublicKey, pid PeerID) bool {
 	return generatedPID == pid
 }
 
-func GetSecureRandomMessage() string {
+func GenerateSecureRandomMessage() string {
 	randomMessage := rand.Text()
 	return randomMessage
 }

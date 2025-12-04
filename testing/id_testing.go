@@ -65,7 +65,7 @@ func peerID_verification_test() {
 	log.Default().Println("Peer 1 ID:", peer1PeerID)
 
 	// Peer 1 signs a message
-	message := id_tools.GetSecureRandomMessage()
+	message := id_tools.GenerateSecureRandomMessage()
 	signature := id_tools.SignMessage(*peer1PrivateKey, message)
 
 	log.Default().Println("Message:", message)
