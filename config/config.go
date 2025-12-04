@@ -1,11 +1,11 @@
 package config
 
 import (
+	"crypto/ecdsa"
 	"sync"
 
 	"os"
 
-	ecies "github.com/ecies/go/v2"
 	"github.com/joho/godotenv"
 	"github.com/kutluhann/decentralized-file-sharing-system/id_tools"
 )
@@ -13,7 +13,7 @@ import (
 // Config is a simple in-memory for runtime configuration
 // (private keys, context, derived keys from env, etc).
 type Config struct {
-	privateKey           *ecies.PrivateKey
+	privateKey           *ecdsa.PrivateKey
 	StorageEncryptionKey string
 	peerID               id_tools.PeerID
 }
@@ -44,11 +44,11 @@ func GetConfig() *Config {
 	return config
 }
 
-func (c *Config) SetPrivateKey(key *ecies.PrivateKey) {
+func (c *Config) SetPrivateKey(key *ecdsa.PrivateKey) {
 	c.privateKey = key
 }
 
-func (c *Config) GetPrivateKey() *ecies.PrivateKey {
+func (c *Config) GetPrivateKey() *ecdsa.PrivateKey {
 	return c.privateKey
 }
 
