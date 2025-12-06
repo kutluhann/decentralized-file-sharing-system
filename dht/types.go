@@ -3,24 +3,25 @@ package dht
 import (
 	"time"
 	"sync"
+
+	"github.com/kutluhann/decentralized-file-sharing-system/id_tools"
+	"github.com/kutluhann/decentralized-file-sharing-system/constants"
 )
 
-type ID [KeySizeBytes]byte
-
 type Node struct {
-	ID ID
+	ID id_tools.PeerID
 	IP string
 	Port int
 	LastUpdated time.Time
 }
 
 type Bucket struct {
-	nodes []Node
+	Nodes []Node
 	mutex sync.RWMutex
 }
 
 type RoutingTable struct {
 	LocalNode Node
-	Buckets [KeySizeBytes * 8]*Bucket
+	Buckets [constants.KeySizeBytes * 8]*Bucket
 	mutex sync.RWMutex
 }
