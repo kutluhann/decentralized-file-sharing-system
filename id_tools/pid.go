@@ -108,3 +108,21 @@ func VerifySignature(publicKey ecdsa.PublicKey, message string, signature []byte
 	valid := ecdsa.VerifyASN1(&publicKey, hashedMessage[:], signature)
 	return valid
 }
+
+func VerifyIdentity(privateKey *ecdsa.PrivateKey, peerID PeerID) bool {
+	if !CheckPublicKeyMatchesPeerID(&privateKey.PublicKey, peerID) {
+		log.Println("Error: Public Key does not match Peer ID")
+		return false
+	}
+
+	message := GenerateSecureRandomMessage()
+	signature := SignMessage(*privateKey, message)
+	isValid := VerifySignature(privateKey.PublicKey, message, signature)
+
+	if !isValid {
+		log.Println("Error: Cryptographic signature verification failed")
+		return false
+	}
+
+	return true
+}
