@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"sync"
+	"time"
 )
 
 type MessageHandler interface {
@@ -211,4 +212,56 @@ func (s *Network) SendMessage(msg Message, address string) error {
 		return err
 	}
 	return s.SendMessageToUDPAddr(msg, udpAddr)
+}
+
+// SendFindNode sends a FIND_NODE RPC request over UDP and waits for response
+func (s *Network) SendFindNode(target Contact, searchID NodeID) ([]Contact, error) {
+	rpcID := generateRPCID()
+
+	msg := Message{
+		Type:     FIND_NODE,
+		RPCID:    rpcID,
+		SenderID: s.SelfID,
+		Payload: FindNodeRequest{
+			TargetID: searchID,
+		},
+	}
+
+	// Register response channel
+	respChan := make(chan Message, 1)
+	s.RegisterResponseChannel(rpcID, respChan)
+	defer s.UnregisterResponseChannel(rpcID)
+
+	// Send request
+	addr := fmt.Sprintf("%s:%d", target.IP, target.Port)
+	err := s.SendMessage(msg, addr)
+	if err != nil {
+		return nil, fmt.Errorf("failed to send FIND_NODE: %v", err)
+	}
+
+	// Wait for response with timeout
+	select {
+	case resp := <-respChan:
+		if resp.Type != FIND_NODE_RES {
+			return nil, fmt.Errorf("expected FIND_NODE_RES, got %v", resp.Type)
+		}
+
+		// Parse response payload
+		payloadBytes, _ := json.Marshal(resp.Payload)
+		var findNodeResp FindNodeResponse
+		err := json.Unmarshal(payloadBytes, &findNodeResp)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse FIND_NODE response: %v", err)
+		}
+
+		return findNodeResp.Nodes, nil
+
+	case <-time.After(5 * time.Second):
+		return nil, fmt.Errorf("timeout waiting for FIND_NODE response from %s", addr)
+	}
+}
+
+// generateRPCID creates a simple RPC ID (we could use the id_tools function, but keeping it simple)
+func generateRPCID() string {
+	return fmt.Sprintf("rpc-%d", time.Now().UnixNano())
 }

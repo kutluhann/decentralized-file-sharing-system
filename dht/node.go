@@ -5,6 +5,8 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"fmt"
+	"net"
+	"strconv"
 	"sync"
 	"time"
 
@@ -47,7 +49,8 @@ func NewNode(contact Contact, privateKey *ecdsa.PrivateKey) *Node {
 }
 
 // JoinNetwork initiates the bootstrap process with full handshake
-func (n *Node) JoinNetwork(bootstrapAddr string) error {
+// Returns the bootstrap node's Contact info on success
+func (n *Node) JoinNetwork(bootstrapAddr string) (Contact, error) {
 	fmt.Printf("[JOIN] Step 1/4: Sending JOIN_REQ to %s...\n", bootstrapAddr)
 
 	// Step 1: Send JOIN_REQ with our PeerID and PublicKey
@@ -72,17 +75,29 @@ func (n *Node) JoinNetwork(bootstrapAddr string) error {
 	// Send the request
 	err := n.Network.SendMessage(joinReq, bootstrapAddr)
 	if err != nil {
-		return fmt.Errorf("failed to send JOIN_REQ: %v", err)
+		return Contact{}, fmt.Errorf("failed to send JOIN_REQ: %v", err)
 	}
 
 	// Step 2: Wait for JOIN_CHALLENGE (10 seconds timeout)
+	var bootstrapContact Contact
+
 	select {
 	case challengeMsg := <-respChan:
 		if challengeMsg.Type != JOIN_CHALLENGE {
-			return fmt.Errorf("expected JOIN_CHALLENGE, got %v", challengeMsg.Type)
+			return Contact{}, fmt.Errorf("expected JOIN_CHALLENGE, got %v", challengeMsg.Type)
 		}
 
 		fmt.Printf("[JOIN] Step 2/4: Received JOIN_CHALLENGE from %s\n", challengeMsg.SenderID.String()[:16])
+
+		// Save bootstrap node info
+		host, portStr, _ := net.SplitHostPort(bootstrapAddr)
+		port, _ := strconv.Atoi(portStr)
+		bootstrapContact = Contact{
+			ID:       challengeMsg.SenderID,
+			IP:       host,
+			Port:     port,
+			LastSeen: time.Now(),
+		}
 
 		// Extract challenge
 		payloadBytes, _ := json.Marshal(challengeMsg.Payload)
@@ -111,14 +126,14 @@ func (n *Node) JoinNetwork(bootstrapAddr string) error {
 
 		err := n.Network.SendMessage(joinRes, bootstrapAddr)
 		if err != nil {
-			return fmt.Errorf("failed to send JOIN_RES: %v", err)
+			return Contact{}, fmt.Errorf("failed to send JOIN_RES: %v", err)
 		}
 
 		// Step 4: Wait for JOIN_ACK
 		select {
 		case ackMsg := <-ackChan:
 			if ackMsg.Type != JOIN_ACK {
-				return fmt.Errorf("expected JOIN_ACK, got %v", ackMsg.Type)
+				return Contact{}, fmt.Errorf("expected JOIN_ACK, got %v", ackMsg.Type)
 			}
 
 			payloadBytes, _ := json.Marshal(ackMsg.Payload)
@@ -127,17 +142,17 @@ func (n *Node) JoinNetwork(bootstrapAddr string) error {
 
 			if ack.Success {
 				fmt.Printf("[JOIN] Step 4/4: ✓ Successfully joined network! Message: %s\n", ack.Message)
-				return nil
+				return bootstrapContact, nil
 			} else {
-				return fmt.Errorf("[JOIN] Step 4/4: ✗ Join rejected: %s", ack.Message)
+				return Contact{}, fmt.Errorf("[JOIN] Step 4/4: ✗ Join rejected: %s", ack.Message)
 			}
 
 		case <-time.After(10 * time.Second):
-			return fmt.Errorf("[JOIN] timeout waiting for JOIN_ACK")
+			return Contact{}, fmt.Errorf("[JOIN] timeout waiting for JOIN_ACK")
 		}
 
 	case <-time.After(10 * time.Second):
-		return fmt.Errorf("[JOIN] timeout waiting for JOIN_CHALLENGE")
+		return Contact{}, fmt.Errorf("[JOIN] timeout waiting for JOIN_CHALLENGE")
 	}
 }
 
@@ -147,7 +162,23 @@ func (n *Node) JoinNetwork(bootstrapAddr string) error {
 
 func (n *Node) HandleFindNode(sender Contact, targetID NodeID) []Contact {
 	n.RoutingTable.Update(sender)
-	return n.RoutingTable.GetClosestNodes(targetID, 20) // K=20
+
+	// Get closest nodes from routing table
+	allNodes := n.RoutingTable.GetClosestNodes(targetID, 20)
+
+	// Filter out the sender (they already know about themselves)
+	var nodes []Contact
+	for _, node := range allNodes {
+		if node.ID != sender.ID {
+			nodes = append(nodes, node)
+			fmt.Printf("[SERVER] HandleFindNode: returning %s\n", node.ID.String()[:16])
+		} else {
+			fmt.Printf("[SERVER] HandleFindNode: skipping sender %s\n", sender.ID.String()[:16])
+		}
+	}
+
+	fmt.Printf("[SERVER] HandleFindNode: returning %d nodes (filtered from %d)\n", len(nodes), len(allNodes))
+	return nodes
 }
 
 func (n *Node) HandlePing(sender Contact) {

@@ -9,7 +9,6 @@ import (
 	"os"
 	"time"
 
-	// TEK PAKET: Artık network import'u yok.
 	"github.com/kutluhann/decentralized-file-sharing-system/dht"
 	"github.com/kutluhann/decentralized-file-sharing-system/id_tools"
 )
@@ -76,10 +75,30 @@ func main() {
 
 		fmt.Printf("--> Bootstrapping... Connecting to %s\n", *bootstrapIP)
 
-		err = node.JoinNetwork(*bootstrapIP)
+		// Step 1: Secure Handshake (Authentication)
+		bootstrapContact, err := node.JoinNetwork(*bootstrapIP)
 		if err != nil {
 			log.Fatalf("FATAL: Failed to join network: %v\n", err)
 		}
+
+		fmt.Println("✓ Secure handshake complete!")
+		fmt.Printf("✓ Bootstrap node: %s at %s:%d\n",
+			bootstrapContact.ID.String()[:16], bootstrapContact.IP, bootstrapContact.Port)
+
+		fmt.Printf("[JOIN] Starting Kademlia bootstrap process\n")
+
+		// 1. Add the bootstrap node to our routing table
+		node.RoutingTable.Update(bootstrapContact)
+		fmt.Printf("[JOIN] Added bootstrap node %s to routing table\n",
+			bootstrapContact.ID.String()[:16])
+
+		// 2. Perform a Self-Lookup
+		// This is the core of Kademlia's bootstrap: by looking up our own ID,
+		// we populate the buckets closest to us, which are the most important.
+		fmt.Printf("[JOIN] Performing self-lookup to populate routing table\n")
+		closestNodes := node.NodeLookup(node.Self.ID)
+
+		fmt.Printf("[JOIN] ✓ Bootstrap complete. Found %d nodes close to self\n", len(closestNodes))
 
 		fmt.Println("✓ Successfully joined the network!")
 	}
