@@ -13,7 +13,7 @@ func main() {
 	config.Init()
 
 	testing.Id_Test()
-	myNode := dht.CreateNode("peer-123")
+	myNode := dht.CreateNode("127.0.0.1", 8000, "peer-1")
 
 	fmt.Println("Main: Node ID ->", myNode.ID)
 }
