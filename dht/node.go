@@ -1,132 +1,305 @@
 package dht
 
 import (
-	"bytes"
 	"crypto/ecdsa"
-	"encoding/hex"
+	"crypto/x509"
+	"encoding/json"
+	"fmt"
+	"net"
+	"strconv"
 	"sync"
+	"time"
 
-	"github.com/kutluhann/decentralized-file-sharing-system/constants"
 	"github.com/kutluhann/decentralized-file-sharing-system/id_tools"
 )
 
-type NodeID = id_tools.PeerID
+type Contact struct {
+	ID       NodeID
+	IP       string
+	Port     int
+	LastSeen time.Time
+}
 
-func IDToString(id NodeID) string {
-	return hex.EncodeToString(id[:])
+// Challenge tracking for join handshake
+type PendingChallenge struct {
+	Nonce     string
+	Timestamp time.Time
+	PubKey    []byte
 }
 
 type Node struct {
-	ID      NodeID
-	Name    string
-	Contact Contact
-
-	// TODO: Add these files
+	Self         Contact
 	RoutingTable *RoutingTable
-
-	// Local storage for the DHT (Key = File Hash 32-byte)
-	Storage    map[NodeID][]byte
-	StorageMux sync.RWMutex // Safety for map access
-
-	// Store private key
-	PrivKey *ecdsa.PrivateKey
-
-	Network Network
-}
-
-type Contact struct {
-	ID   NodeID
-	IP   string
-	Port int
-	Name string
+	// Storage    map[NodeID][]byte
+	// StorageMux sync.RWMutex
+	PrivKey           *ecdsa.PrivateKey
+	Network           *Network
+	PendingChallenges map[NodeID]PendingChallenge // For server side: track challenges sent to peers
+	ChallengeMutex    sync.RWMutex
 }
 
 // CreateNode initializes the DHT node using the identity from config.
-// Note: We changed the signature to include IP/Port for networking.
-func CreateNode(ip string, port int, name string) *Node {
-	priv, nodeID := id_tools.GenerateNewPID()
+func NewNode(contact Contact, privateKey *ecdsa.PrivateKey) *Node {
+	return &Node{
+		Self:              contact,
+		RoutingTable:      NewRoutingTable(contact),
+		PrivKey:           privateKey,
+		PendingChallenges: make(map[NodeID]PendingChallenge),
+	}
+}
 
-	contact := Contact{
-		ID:   nodeID,
-		IP:   ip,
-		Port: port,
-		Name: name,
+// JoinNetwork initiates the bootstrap process with full handshake
+// Returns the bootstrap node's Contact info on success
+func (n *Node) JoinNetwork(bootstrapAddr string) (Contact, error) {
+	fmt.Printf("[JOIN] Step 1/4: Sending JOIN_REQ to %s...\n", bootstrapAddr)
+
+	// Step 1: Send JOIN_REQ with our PeerID and PublicKey
+	pubKeyBytes, _ := x509.MarshalPKIXPublicKey(&n.PrivKey.PublicKey)
+	rpcID := id_tools.GenerateSecureRandomMessage()
+
+	joinReq := Message{
+		Type:     JOIN_REQ,
+		RPCID:    rpcID,
+		SenderID: n.Self.ID,
+		Payload: JoinRequestPayload{
+			PeerID:    n.Self.ID,
+			PublicKey: pubKeyBytes,
+		},
 	}
 
-	node := &Node{
-		ID:      nodeID,
-		Name:    name,
-		Contact: contact,
-		Storage: make(map[NodeID][]byte),
-		PrivKey: priv,
+	// Create response channel and register it
+	respChan := make(chan Message, 1)
+	n.Network.RegisterResponseChannel(rpcID, respChan)
+	defer n.Network.UnregisterResponseChannel(rpcID)
+
+	// Send the request
+	err := n.Network.SendMessage(joinReq, bootstrapAddr)
+	if err != nil {
+		return Contact{}, fmt.Errorf("failed to send JOIN_REQ: %v", err)
 	}
 
-	// Initialize components (We will create these constructors next)
-	node.RoutingTable = NewRoutingTable(node)
-	node.Network = &MockNetwork{Self: contact} // TODO: Change this to RpcNetwork Using net/rpc
-	return node
+	// Step 2: Wait for JOIN_CHALLENGE (10 seconds timeout)
+	var bootstrapContact Contact
+
+	select {
+	case challengeMsg := <-respChan:
+		if challengeMsg.Type != JOIN_CHALLENGE {
+			return Contact{}, fmt.Errorf("expected JOIN_CHALLENGE, got %v", challengeMsg.Type)
+		}
+
+		fmt.Printf("[JOIN] Step 2/4: Received JOIN_CHALLENGE from %s\n", challengeMsg.SenderID.String()[:16])
+
+		// Save bootstrap node info
+		host, portStr, _ := net.SplitHostPort(bootstrapAddr)
+		port, _ := strconv.Atoi(portStr)
+		bootstrapContact = Contact{
+			ID:       challengeMsg.SenderID,
+			IP:       host,
+			Port:     port,
+			LastSeen: time.Now(),
+		}
+
+		// Extract challenge
+		payloadBytes, _ := json.Marshal(challengeMsg.Payload)
+		var challenge JoinChallengePayload
+		json.Unmarshal(payloadBytes, &challenge)
+
+		// Step 3: Sign the challenge
+		fmt.Printf("[JOIN] Step 3/4: Signing challenge nonce...\n")
+		signature := id_tools.SignMessage(*n.PrivKey, challenge.Nonce)
+
+		// Send JOIN_RES with signature
+		joinRes := Message{
+			Type:     JOIN_RES,
+			RPCID:    id_tools.GenerateSecureRandomMessage(),
+			SenderID: n.Self.ID,
+			Payload: JoinResponsePayload{
+				Signature: signature,
+			},
+		}
+
+		// Register new response channel for ACK
+		ackRPCID := joinRes.RPCID
+		ackChan := make(chan Message, 1)
+		n.Network.RegisterResponseChannel(ackRPCID, ackChan)
+		defer n.Network.UnregisterResponseChannel(ackRPCID)
+
+		err := n.Network.SendMessage(joinRes, bootstrapAddr)
+		if err != nil {
+			return Contact{}, fmt.Errorf("failed to send JOIN_RES: %v", err)
+		}
+
+		// Step 4: Wait for JOIN_ACK
+		select {
+		case ackMsg := <-ackChan:
+			if ackMsg.Type != JOIN_ACK {
+				return Contact{}, fmt.Errorf("expected JOIN_ACK, got %v", ackMsg.Type)
+			}
+
+			payloadBytes, _ := json.Marshal(ackMsg.Payload)
+			var ack JoinAckPayload
+			json.Unmarshal(payloadBytes, &ack)
+
+			if ack.Success {
+				fmt.Printf("[JOIN] Step 4/4: ✓ Successfully joined network! Message: %s\n", ack.Message)
+				return bootstrapContact, nil
+			} else {
+				return Contact{}, fmt.Errorf("[JOIN] Step 4/4: ✗ Join rejected: %s", ack.Message)
+			}
+
+		case <-time.After(10 * time.Second):
+			return Contact{}, fmt.Errorf("[JOIN] timeout waiting for JOIN_ACK")
+		}
+
+	case <-time.After(10 * time.Second):
+		return Contact{}, fmt.Errorf("[JOIN] timeout waiting for JOIN_CHALLENGE")
+	}
 }
 
 // ---------------------------------------------------------
-// SERVER HANDLERS (Called when we RECEIVE a message)
+// SERVER HANDLERS (Implements MessageHandler Interface)
 // ---------------------------------------------------------
 
-// HandleFindNode is called when someone asks us "Who is close to X?"
 func (n *Node) HandleFindNode(sender Contact, targetID NodeID) []Contact {
-	// 1. Passive Update: We learned 'sender' is alive!
-	// (Note: AddContact handles the splitting logic internally)
-	n.RoutingTable.AddContact(sender)
+	n.RoutingTable.Update(sender)
 
-	// 2. Find closest nodes in OUR table
-	closest := n.RoutingTable.FindClosest(targetID, 20) // TODO: Define this as a config K=20
+	// Get closest nodes from routing table
+	allNodes := n.RoutingTable.GetClosestNodes(targetID, 20)
 
-	// 3. Return them
-	return closest
+	// Filter out the sender (they already know about themselves)
+	var nodes []Contact
+	for _, node := range allNodes {
+		if node.ID != sender.ID {
+			nodes = append(nodes, node)
+			fmt.Printf("[SERVER] HandleFindNode: returning %s\n", node.ID.String()[:16])
+		} else {
+			fmt.Printf("[SERVER] HandleFindNode: skipping sender %s\n", sender.ID.String()[:16])
+		}
+	}
+
+	fmt.Printf("[SERVER] HandleFindNode: returning %d nodes (filtered from %d)\n", len(nodes), len(allNodes))
+	return nodes
 }
 
-// HandlePing is called when someone checks if we are alive
 func (n *Node) HandlePing(sender Contact) {
-	// Passive Update
-	n.RoutingTable.AddContact(sender)
+	n.RoutingTable.Update(sender)
 }
 
 func (n *Node) HandleStore(sender Contact, key NodeID, value []byte) {
-	n.RoutingTable.AddContact(sender)
-
-	n.StorageMux.Lock()
-	defer n.StorageMux.Unlock()
-	n.Storage[key] = value
+	n.RoutingTable.Update(sender)
+	// Store logic here
 }
 
 func (n *Node) HandleFindValue(sender Contact, key NodeID) ([]byte, []Contact) {
-	n.RoutingTable.AddContact(sender)
-
-	n.StorageMux.RLock()
-	val, ok := n.Storage[key]
-	n.StorageMux.RUnlock()
-
-	if ok {
-		return val, nil
-	}
-	return nil, n.RoutingTable.FindClosest(key, constants.K)
+	n.RoutingTable.Update(sender)
+	// Value logic here
+	return nil, n.RoutingTable.GetClosestNodes(key, 20)
 }
 
-// Xor calculates the distance between two 256-bit PeerIDs.
-func Xor(a, b NodeID) NodeID {
-	var distance NodeID
-	// We must loop through all 32 bytes manually
-	for i := 0; i < 32; i++ {
-		distance[i] = a[i] ^ b[i]
+// --- Handshake Handlers ---
+
+// HandleJoinRequest is called by the server node when a new node wants to join
+func (n *Node) HandleJoinRequest(sender Contact, payload JoinRequestPayload) (JoinChallengePayload, error) {
+	fmt.Printf("[SERVER] Received JOIN_REQ from %s\n", payload.PeerID.String()[:16])
+
+	// 1. Verify PubKey -> PeerID match (Sybil attack prevention)
+	pubKey, err := x509.ParsePKIXPublicKey(payload.PublicKey)
+	if err != nil {
+		fmt.Printf("[SERVER] ✗ Invalid public key format from %s\n", payload.PeerID.String()[:16])
+		return JoinChallengePayload{}, fmt.Errorf("invalid public key format")
 	}
-	return distance
+
+	ecdsaPubKey, ok := pubKey.(*ecdsa.PublicKey)
+	if !ok {
+		fmt.Printf("[SERVER] ✗ Public key is not ECDSA from %s\n", payload.PeerID.String()[:16])
+		return JoinChallengePayload{}, fmt.Errorf("public key is not ECDSA")
+	}
+
+	// Critical check: Does the public key actually generate this PeerID?
+	if !id_tools.CheckPublicKeyMatchesPeerID(ecdsaPubKey, id_tools.PeerID(payload.PeerID)) {
+		fmt.Printf("[SERVER] ✗ SYBIL ATTACK DETECTED: PubKey doesn't match PeerID from %s\n", payload.PeerID.String()[:16])
+		return JoinChallengePayload{}, fmt.Errorf("public key does not match PeerID - potential sybil attack")
+	}
+
+	fmt.Printf("[SERVER] ✓ PeerID verification passed\n")
+
+	// 2. Generate Challenge (random nonce for signature verification)
+	nonce := id_tools.GenerateSecureRandomMessage()
+
+	// 3. Store the challenge for later verification (with 10 second expiry)
+	n.ChallengeMutex.Lock()
+	n.PendingChallenges[payload.PeerID] = PendingChallenge{
+		Nonce:     nonce,
+		Timestamp: time.Now(),
+		PubKey:    payload.PublicKey,
+	}
+	n.ChallengeMutex.Unlock()
+
+	fmt.Printf("[SERVER] Sending challenge nonce to %s (expires in 10s)\n", payload.PeerID.String()[:16])
+
+	return JoinChallengePayload{Nonce: nonce}, nil
 }
 
-// Returns -1 if id1 is closer, 1 if id2 is closer, 0 if equal.
-func CompareDistance(id1, id2, target NodeID) int {
-	dist1 := Xor(id1, target)
-	dist2 := Xor(id2, target)
+// HandleJoinResponse is called by server node when new node sends signature
+func (n *Node) HandleJoinResponse(sender Contact, payload JoinResponsePayload) (JoinAckPayload, error) {
+	fmt.Printf("[SERVER] Received JOIN_RES (signature) from %s\n", sender.ID.String()[:16])
 
-	// We use bytes.Compare to compare the two 32-byte arrays lexicographically.
-	// Since PeerID is just [32]byte, slicing it with [:] works perfectly.
-	return bytes.Compare(dist1[:], dist2[:])
+	// 1. Retrieve the pending challenge
+	n.ChallengeMutex.RLock()
+	challenge, exists := n.PendingChallenges[sender.ID]
+	n.ChallengeMutex.RUnlock()
+
+	if !exists {
+		fmt.Printf("[SERVER] ✗ No pending challenge for %s (may have expired)\n", sender.ID.String()[:16])
+		return JoinAckPayload{Success: false, Message: "No pending challenge found"}, fmt.Errorf("no pending challenge")
+	}
+
+	// 2. Check if challenge expired (10 seconds timeout)
+	if time.Since(challenge.Timestamp) > 10*time.Second {
+		n.ChallengeMutex.Lock()
+		delete(n.PendingChallenges, sender.ID)
+		n.ChallengeMutex.Unlock()
+
+		fmt.Printf("[SERVER] ✗ Challenge expired for %s\n", sender.ID.String()[:16])
+		return JoinAckPayload{Success: false, Message: "Challenge expired"}, fmt.Errorf("challenge expired")
+	}
+
+	// 3. Parse the public key
+	pubKey, err := x509.ParsePKIXPublicKey(challenge.PubKey)
+	if err != nil {
+		fmt.Printf("[SERVER] ✗ Failed to parse public key\n")
+		return JoinAckPayload{Success: false, Message: "Invalid public key"}, fmt.Errorf("invalid public key")
+	}
+
+	ecdsaPubKey, ok := pubKey.(*ecdsa.PublicKey)
+	if !ok {
+		fmt.Printf("[SERVER] ✗ Public key is not ECDSA\n")
+		return JoinAckPayload{Success: false, Message: "Invalid key type"}, fmt.Errorf("invalid key type")
+	}
+
+	// 4. Verify the signature
+	if !id_tools.VerifySignature(*ecdsaPubKey, challenge.Nonce, payload.Signature) {
+		fmt.Printf("[SERVER] ✗ Signature verification FAILED for %s\n", sender.ID.String()[:16])
+
+		// Clean up
+		n.ChallengeMutex.Lock()
+		delete(n.PendingChallenges, sender.ID)
+		n.ChallengeMutex.Unlock()
+
+		return JoinAckPayload{Success: false, Message: "Invalid signature"}, fmt.Errorf("invalid signature")
+	}
+
+	fmt.Printf("[SERVER] ✓ Signature verification PASSED\n")
+
+	// 5. Success! Add peer to routing table
+	n.RoutingTable.Update(sender)
+
+	// Clean up challenge
+	n.ChallengeMutex.Lock()
+	delete(n.PendingChallenges, sender.ID)
+	n.ChallengeMutex.Unlock()
+
+	fmt.Printf("[SERVER] ✓ Peer %s successfully joined and added to DHT!\n", sender.ID.String()[:16])
+
+	return JoinAckPayload{Success: true, Message: "Welcome to the DHT network!"}, nil
 }

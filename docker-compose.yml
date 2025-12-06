@@ -1,0 +1,24 @@
+services:
+  bootstrap:
+    build: .
+    container_name: dht-bootstrap
+    command: ["-genesis", "-port", "8080"]
+    networks:
+      - dht-network
+    ports:
+      - "8080:8080/udp"
+    restart: unless-stopped
+
+  node:
+    build: .
+    command: ["-port", "8080", "-bootstrap", "bootstrap:8080"]
+    networks:
+      - dht-network
+    depends_on:
+      - bootstrap
+    ports:
+      - "8081-8100:8080/udp"
+
+networks:
+  dht-network:
+    driver: bridge

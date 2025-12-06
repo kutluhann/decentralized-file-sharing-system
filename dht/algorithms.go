@@ -1,9 +1,7 @@
 package dht
 
 import (
-	// "fmt"
 	"fmt"
-	"sort"
 
 	"github.com/kutluhann/decentralized-file-sharing-system/constants"
 )
@@ -49,11 +47,17 @@ func (ls *LookupState) Append(contacts []Contact) {
 
 // Sort orders the Shortlist by distance to the Target.
 func (ls *LookupState) Sort() {
-	sorter := &ContactSorter{
-		contacts: ls.Shortlist,
-		target:   ls.Target,
+	// Inline bubble sort by XOR distance (simple but effective for small lists)
+	// Alternative: Use Go's sort.Slice with custom comparator
+	for i := 0; i < len(ls.Shortlist); i++ {
+		for j := i + 1; j < len(ls.Shortlist); j++ {
+			distI := ls.Shortlist[i].ID.Xor(ls.Target)
+			distJ := ls.Shortlist[j].ID.Xor(ls.Target)
+			if distJ.Less(distI) {
+				ls.Shortlist[i], ls.Shortlist[j] = ls.Shortlist[j], ls.Shortlist[i]
+			}
+		}
 	}
-	sort.Sort(sorter)
 }
 
 // PickNextBest returns the closest node that has NOT been queried yet.
@@ -81,15 +85,17 @@ func (ls *LookupState) MarkContacted(id NodeID) {
 
 // NodeLookup performs the iterative lookup for a target ID.
 // It keeps crawling the network until it finds the k closest nodes.
+//
+// TODO: Currently uses direct handler calls for testing. In production,
+// this should use Network.SendFindNode() for actual RPC over UDP.
 func (n *Node) NodeLookup(targetID NodeID) []Contact {
 	// 1. INITIALIZATION
 	// Start with the closest nodes we know locally.
-	localCandidates := n.RoutingTable.FindClosest(targetID, constants.K)
+	localCandidates := n.RoutingTable.GetClosestNodes(targetID, constants.K)
 
 	// Debug print
-	for i := range localCandidates {
-		fmt.Printf("Local Candidate: %s ID: %x\n", localCandidates[i].Name, localCandidates[i].ID)
-	}
+	fmt.Printf("[LOOKUP] Searching for target: %s\n", targetID.String()[:16])
+	fmt.Printf("[LOOKUP] Starting with %d local candidates\n", len(localCandidates))
 
 	state := NewLookupState(targetID, localCandidates)
 
@@ -101,57 +107,59 @@ func (n *Node) NodeLookup(targetID NodeID) []Contact {
 
 		// TERMINATION: If no unqueried nodes remain, we are done.
 		if candidate == nil {
+			fmt.Printf("[LOOKUP] No more unqueried nodes, terminating\n")
 			break
 		}
 
 		// B. NETWORK CALL (RPC)
-		// fmt.Printf("   [%s] asking -> [%s] ...\n", n.Name, candidate.Name)
+		fmt.Printf("[LOOKUP] Querying %s:%d for nodes closer to target\n",
+			candidate.IP, candidate.Port)
 
+		// Send FIND_NODE RPC over UDP
 		newNodes, err := n.Network.SendFindNode(*candidate, targetID)
 
 		// Mark as contacted regardless of success/fail to avoid loops
 		state.MarkContacted(candidate.ID)
 
 		// C. UPDATE STATE
-		if err == nil {
-			// If successful, add the new suggestions to our list
-			state.Append(newNodes)
+		if err != nil {
+			fmt.Printf("[LOOKUP] ✗ Failed to query %s:%d: %v\n",
+				candidate.IP, candidate.Port, err)
+			continue
+		}
 
-			// Passive Update: Since they replied, we verify they are alive
-			n.RoutingTable.AddContact(*candidate)
+		// If successful, add the new suggestions to our list
+		state.Append(newNodes)
 
-			// *** EARLY EXIT CHECK ***
-			// If one of the returned nodes is the target, we are done!
-			for _, receivedNode := range newNodes {
-				if receivedNode.ID == targetID {
-					// Found it! Return just this one.
-					fmt.Println("FOUND NODE:", receivedNode.ID)
-					return []Contact{receivedNode}
-				}
+		// Passive Update: Since they replied, we verify they are alive
+		n.RoutingTable.Update(*candidate)
+
+		// *** EARLY EXIT CHECK ***
+		// If one of the returned nodes is the target, we are done!
+		for _, receivedNode := range newNodes {
+			if receivedNode.ID == targetID {
+				// Found it! Return just this one.
+				fmt.Printf("[LOOKUP] ✓ Found exact target node: %s\n", receivedNode.ID.String()[:16])
+				return []Contact{receivedNode}
 			}
 		}
 	}
 
 	// 3. RETURN RESULTS
 	// Return the top K nodes from our sorted shortlist
+	fmt.Printf("[LOOKUP] Lookup complete, returning %d closest nodes\n",
+		min(len(state.Shortlist), constants.K))
+
 	if len(state.Shortlist) > constants.K {
 		return state.Shortlist[:constants.K]
 	}
 	return state.Shortlist
 }
 
-// ---------------------------------------------------------
-// ALGORITHMS: JOIN
-// ---------------------------------------------------------
-
-func (n *Node) Join(bootstrapNode Contact) {
-	// 1. Add the bootstrap node to our table
-	n.RoutingTable.AddContact(bootstrapNode)
-
-	// 2. Perform a Self-Lookup
-	// This populates the buckets close to us.
-	n.NodeLookup(n.ID)
-
-	fmt.Printf("[%s] Joined network via %s (Routing Table size: %d)\n",
-		n.Name, bootstrapNode.Name, n.RoutingTable.TotalContacts())
+// Helper function for min
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
