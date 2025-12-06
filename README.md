@@ -18,11 +18,9 @@ This project implements a distributed hash table (DHT) based on the Kademlia pro
     * Start the HTTP API server in a goroutine.
     * Wait/Block (keep the program running).
 
-**File:** `config.go`
+**File:** `constants.go`
 * **Constants**:
     * `K = 20` (Bucket size)
-    * `ALPHA = 3` (Concurrency parameter, or 1 for sequential)
-    * `BIT_SIZE = 16` (ID space size for simplified project)
 
 ---
 
