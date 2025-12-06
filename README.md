@@ -4,9 +4,10 @@
 This project implements a **secure, distributed hash table (DHT)** based on the **Kademlia protocol** with cryptographic identity verification and Sybil attack protection. The system uses ECDSA public-key cryptography for peer authentication.
 
 ### Architecture
-1. **Core DHT Layer (`/dht`)**: Routing table, k-buckets, network protocol, and peer discovery
+1. **Core DHT Layer (`/dht`)**: Routing table, k-buckets, network protocol, peer discovery, and distributed storage
 2. **Identity Layer (`/id_tools`)**: ECDSA key generation, PeerID derivation, signature verification
-3. **Constants (`/constants`)**: System-wide parameters (K=20, Alpha=3, KeySize=256-bit)
+3. **HTTP API Layer (`/api`)**: REST endpoints for client applications to store and retrieve data
+4. **Constants (`/constants`)**: System-wide parameters (K=20, Alpha=3, KeySize=256-bit)
 
 ### Key Features
 ✅ **256-bit NodeID** (SHA-256 based)  
@@ -14,7 +15,10 @@ This project implements a **secure, distributed hash table (DHT)** based on the 
 ✅ **Secure Join Protocol** with 4-step handshake  
 ✅ **Sybil Attack Prevention** (PublicKey ↔ PeerID verification)  
 ✅ **Challenge-Response Authentication** (10-second timeout)  
-✅ **ECDSA Signature Verification** (id_tools integration)
+✅ **ECDSA Signature Verification** (id_tools integration)  
+✅ **Distributed Storage** with data replication to K closest nodes  
+✅ **HTTP REST API** for client applications  
+✅ **Kademlia Lookup** (Store/FindValue operations)
 
 ---
 
@@ -26,6 +30,7 @@ This project implements a **secure, distributed hash table (DHT)** based on the 
 **CLI Flags**:
 - `-genesis`: Start as Genesis node (no bootstrap required)
 - `-port`: UDP port to listen on (default: 8080)
+- `-http`: HTTP API port (default: 8000)
 - `-bootstrap`: Bootstrap node address (e.g., `127.0.0.1:8080`) - **Required for non-genesis nodes**
 
 **Flow**:
@@ -46,10 +51,10 @@ This project implements a **secure, distributed hash table (DHT)** based on the 
 **Usage Examples**:
 ```bash
 # Start Genesis Node
-go run main.go -genesis -port 8080
+go run main.go -genesis -port 8080 -http 8000
 
 # Join Network
-go run main.go -port 9090 -bootstrap 127.0.0.1:8080
+go run main.go -port 9090 -http 8001 -bootstrap 127.0.0.1:8080
 
 # Error: No bootstrap (will terminate)
 go run main.go -port 9090
@@ -359,18 +364,162 @@ Peer 1 (New)                                      Peer 2 (Genesis)
 
 ---
 
-## 6. Testing
+## 6. Distributed Storage Layer
 
-### Running Two Nodes
+### Store Operation
+Stores key-value pairs by replicating data to K closest nodes in the DHT.
+
+**Algorithm**:
+1. Hash the key to get a 256-bit NodeID
+2. Perform Kademlia NodeLookup to find K closest nodes
+3. Send STORE RPC to each node
+4. Each node saves the data locally
+5. Store locally for caching
+
+**Client-Side**: `Node.Store(key NodeID, value []byte)`  
+**Server-Side**: `HandleStore()` saves to local storage map
+
+### FindValue Operation
+Retrieves values from the DHT network.
+
+**Algorithm**:
+1. Check local cache first (fast path)
+2. If not found, perform NodeLookup to find K closest nodes
+3. Query each node via FIND_VALUE RPC
+4. Return first found value
+5. Cache locally for future requests
+
+**Client-Side**: `Node.FindValue(key NodeID) ([]byte, error)`  
+**Server-Side**: `HandleFindValue()` returns stored value or closest nodes
+
+---
+
+## 7. HTTP API for Client Applications
+
+Each node runs an HTTP server (`api/http_server.go`) for external client access.
+
+### Endpoints
+
+**POST /store** - Store key-value pair
+```bash
+curl -X POST http://localhost:8000/store \
+  -H "Content-Type: application/json" \
+  -d '{"key": "myfile.txt", "value": "Hello World"}'
+```
+
+Response:
+```json
+{
+  "success": true,
+  "message": "Successfully stored in DHT",
+  "key_hash": "7f3a9b2c..."
+}
+```
+
+**POST /get** - Retrieve value by key
+```bash
+curl -X POST http://localhost:8001/get \
+  -H "Content-Type: application/json" \
+  -d '{"key": "myfile.txt"}'
+```
+
+Response:
+```json
+{
+  "success": true,
+  "key_hash": "7f3a9b2c...",
+  "value": "Hello World"
+}
+```
+
+**GET /status** - Node information
+```bash
+curl http://localhost:8000/status
+```
+
+Response:
+```json
+{
+  "node_id": "a1b2c3d4...",
+  "ip": "127.0.0.1",
+  "port": 8080,
+  "stored_keys": 5,
+  "known_peers": 2,
+  "network_status": "connected"
+}
+```
+
+**GET /health** - Health check
+```bash
+curl http://localhost:8000/health
+```
+
+---
+
+## 8. Testing
+
+### Docker Testing (Recommended)
+
+Start a 6-node network (1 bootstrap + 5 nodes):
+
+```bash
+# Start the network
+docker-compose up --build
+
+# Nodes will be available at:
+# Bootstrap: HTTP 8000, UDP 8080
+# Node1:     HTTP 8001, UDP 8081
+# Node2:     HTTP 8002, UDP 8082
+# Node3:     HTTP 8003, UDP 8083
+# Node4:     HTTP 8004, UDP 8084
+# Node5:     HTTP 8005, UDP 8085
+```
+
+### Automated Test Script
+
+Run the included test script to verify all functionality:
+
+```bash
+./test_dht.sh
+```
+
+The script tests:
+- Node health checks
+- Node status verification
+- Data storage operations
+- Cross-node data retrieval
+- Error handling for non-existent keys
+
+### Manual Testing Examples
+
+**Store data via one node:**
+```bash
+curl -X POST http://localhost:8000/store \
+  -H "Content-Type: application/json" \
+  -d '{"key": "test.txt", "value": "Hello DHT!"}'
+```
+
+**Retrieve from a different node:**
+```bash
+curl -X POST http://localhost:8001/get \
+  -H "Content-Type: application/json" \
+  -d '{"key": "test.txt"}'
+```
+
+This demonstrates that data stored on one node can be retrieved from any other node via DHT lookup.
+
+### Local Testing (Without Docker)
 
 **Terminal 1 (Genesis Node)**:
 ```bash
 rm -f private_key.pem
-go run main.go -genesis -port 8080
+go run main.go -genesis -port 8080 -http 8000
 ```
 
 **Terminal 2 (Joining Node)**:
 ```bash
 rm -f private_key.pem
-go run main.go -port 9090 -bootstrap 127.0.0.1:8080
+go run main.go -port 9090 -http 8001 -bootstrap 127.0.0.1:8080
 ```
+
+Then use curl to interact with the HTTP API as shown above.

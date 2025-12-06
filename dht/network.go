@@ -261,6 +261,110 @@ func (s *Network) SendFindNode(target Contact, searchID NodeID) ([]Contact, erro
 	}
 }
 
+// SendStore sends a STORE request to store a key-value pair on a remote node
+func (s *Network) SendStore(target Contact, key NodeID, value []byte) error {
+	rpcID := generateRPCID()
+
+	msg := Message{
+		Type:     STORE,
+		RPCID:    rpcID,
+		SenderID: s.SelfID,
+		Payload: StoreRequest{
+			Key:   key,
+			Value: value,
+		},
+	}
+
+	// Register response channel
+	respChan := make(chan Message, 1)
+	s.RegisterResponseChannel(rpcID, respChan)
+	defer s.UnregisterResponseChannel(rpcID)
+
+	// Send request
+	addr := fmt.Sprintf("%s:%d", target.IP, target.Port)
+	err := s.SendMessage(msg, addr)
+	if err != nil {
+		return fmt.Errorf("failed to send STORE: %v", err)
+	}
+
+	// Wait for response with timeout
+	select {
+	case resp := <-respChan:
+		if resp.Type != STORE_RES {
+			return fmt.Errorf("expected STORE_RES, got %v", resp.Type)
+		}
+
+		// Parse response payload
+		payloadBytes, _ := json.Marshal(resp.Payload)
+		var storeResp StoreResponse
+		err := json.Unmarshal(payloadBytes, &storeResp)
+		if err != nil {
+			return fmt.Errorf("failed to parse STORE response: %v", err)
+		}
+
+		if !storeResp.Success {
+			return fmt.Errorf("remote node failed to store value")
+		}
+
+		return nil
+
+	case <-time.After(5 * time.Second):
+		return fmt.Errorf("timeout waiting for STORE response from %s", addr)
+	}
+}
+
+// SendFindValue sends a FIND_VALUE request to retrieve a value from a remote node
+func (s *Network) SendFindValue(target Contact, key NodeID) ([]byte, bool, error) {
+	rpcID := generateRPCID()
+
+	msg := Message{
+		Type:     FIND_VALUE,
+		RPCID:    rpcID,
+		SenderID: s.SelfID,
+		Payload: FindValueRequest{
+			Key: key,
+		},
+	}
+
+	// Register response channel
+	respChan := make(chan Message, 1)
+	s.RegisterResponseChannel(rpcID, respChan)
+	defer s.UnregisterResponseChannel(rpcID)
+
+	// Send request
+	addr := fmt.Sprintf("%s:%d", target.IP, target.Port)
+	err := s.SendMessage(msg, addr)
+	if err != nil {
+		return nil, false, fmt.Errorf("failed to send FIND_VALUE: %v", err)
+	}
+
+	// Wait for response with timeout
+	select {
+	case resp := <-respChan:
+		if resp.Type != FIND_VALUE_RES {
+			return nil, false, fmt.Errorf("expected FIND_VALUE_RES, got %v", resp.Type)
+		}
+
+		// Parse response payload
+		payloadBytes, _ := json.Marshal(resp.Payload)
+		var findValueResp FindValueResponse
+		err := json.Unmarshal(payloadBytes, &findValueResp)
+		if err != nil {
+			return nil, false, fmt.Errorf("failed to parse FIND_VALUE response: %v", err)
+		}
+
+		if findValueResp.Found {
+			return findValueResp.Value, true, nil
+		}
+
+		// Value not found at this node
+		return nil, false, nil
+
+	case <-time.After(5 * time.Second):
+		return nil, false, fmt.Errorf("timeout waiting for FIND_VALUE response from %s", addr)
+	}
+}
+
 // generateRPCID creates a simple RPC ID (we could use the id_tools function, but keeping it simple)
 func generateRPCID() string {
 	return fmt.Sprintf("rpc-%d", time.Now().UnixNano())

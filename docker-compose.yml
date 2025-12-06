@@ -2,22 +2,78 @@ services:
   bootstrap:
     build: .
     container_name: dht-bootstrap
-    command: ["-genesis", "-port", "8080"]
+    command: ["-genesis", "-port", "8080", "-http", "8000"]
     networks:
       - dht-network
     ports:
-      - "8080:8080/udp"
+      - "8080:8080/udp"  # DHT UDP protocol
+      - "8000:8000"      # HTTP API
     restart: unless-stopped
 
-  node:
+  node1:
     build: .
-    command: ["-port", "8080", "-bootstrap", "bootstrap:8080"]
+    container_name: dht-node1
+    command: ["-port", "8080", "-http", "8000", "-bootstrap", "bootstrap:8080"]
     networks:
       - dht-network
     depends_on:
       - bootstrap
     ports:
-      - "8081-8100:8080/udp"
+      - "8081:8080/udp"  # DHT UDP protocol
+      - "8001:8000"      # HTTP API
+    restart: unless-stopped
+
+  node2:
+    build: .
+    container_name: dht-node2
+    command: ["-port", "8080", "-http", "8000", "-bootstrap", "bootstrap:8080"]
+    networks:
+      - dht-network
+    depends_on:
+      - bootstrap
+    ports:
+      - "8082:8080/udp"  # DHT UDP protocol
+      - "8002:8000"      # HTTP API
+    restart: unless-stopped
+
+  node3:
+    build: .
+    container_name: dht-node3
+    command: ["-port", "8080", "-http", "8000", "-bootstrap", "bootstrap:8080"]
+    networks:
+      - dht-network
+    depends_on:
+      - bootstrap
+    ports:
+      - "8083:8080/udp"  # DHT UDP protocol
+      - "8003:8000"      # HTTP API
+    restart: unless-stopped
+
+  node4:
+    build: .
+    container_name: dht-node4
+    command: ["-port", "8080", "-http", "8000", "-bootstrap", "bootstrap:8080"]
+    networks:
+      - dht-network
+    depends_on:
+      - bootstrap
+    ports:
+      - "8084:8080/udp"  # DHT UDP protocol
+      - "8004:8000"      # HTTP API
+    restart: unless-stopped
+
+  node5:
+    build: .
+    container_name: dht-node5
+    command: ["-port", "8080", "-http", "8000", "-bootstrap", "bootstrap:8080"]
+    networks:
+      - dht-network
+    depends_on:
+      - bootstrap
+    ports:
+      - "8085:8080/udp"  # DHT UDP protocol
+      - "8005:8000"      # HTTP API
+    restart: unless-stopped
 
 networks:
   dht-network:

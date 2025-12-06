@@ -9,13 +9,15 @@ import (
 	"os"
 	"time"
 
+	"github.com/kutluhann/decentralized-file-sharing-system/api"
 	"github.com/kutluhann/decentralized-file-sharing-system/dht"
 	"github.com/kutluhann/decentralized-file-sharing-system/id_tools"
 )
 
 func main() {
 	isGenesis := flag.Bool("genesis", false, "Start as a Genesis Node (no bootstrap)")
-	port := flag.Int("port", 8080, "Port to listen on")
+	port := flag.Int("port", 8080, "UDP port to listen on")
+	httpPort := flag.Int("http", 8000, "HTTP API port for client requests")
 	bootstrapIP := flag.String("bootstrap", "", "Bootstrap Node IP:Port (e.g. 127.0.0.1:8080)")
 	flag.Parse()
 
@@ -59,7 +61,19 @@ func main() {
 
 	fmt.Printf("Node initialized with ID: %s\n", node.Self.ID.String())
 
+	// Start UDP network listener for DHT protocol
 	go network.Listen()
+
+	// Start HTTP API server for client requests
+	httpServer := api.NewHTTPServer(node, *httpPort)
+	go func() {
+		err := httpServer.Start()
+		if err != nil {
+			log.Fatalf("HTTP server failed: %v", err)
+		}
+	}()
+
+	fmt.Printf("HTTP API listening on port %d\n", *httpPort)
 
 	if *isGenesis {
 		fmt.Println("--> Running as GENESIS Node. Waiting for connections...")

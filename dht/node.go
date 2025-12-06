@@ -28,10 +28,10 @@ type PendingChallenge struct {
 }
 
 type Node struct {
-	Self         Contact
-	RoutingTable *RoutingTable
-	// Storage    map[NodeID][]byte
-	// StorageMux sync.RWMutex
+	Self              Contact
+	RoutingTable      *RoutingTable
+	Storage           map[NodeID][]byte // Local key-value storage
+	StorageMux        sync.RWMutex      // Mutex for thread-safe storage access
 	PrivKey           *ecdsa.PrivateKey
 	Network           *Network
 	PendingChallenges map[NodeID]PendingChallenge // For server side: track challenges sent to peers
@@ -43,6 +43,7 @@ func NewNode(contact Contact, privateKey *ecdsa.PrivateKey) *Node {
 	return &Node{
 		Self:              contact,
 		RoutingTable:      NewRoutingTable(contact),
+		Storage:           make(map[NodeID][]byte), // Initialize storage map
 		PrivKey:           privateKey,
 		PendingChallenges: make(map[NodeID]PendingChallenge),
 	}
@@ -187,12 +188,33 @@ func (n *Node) HandlePing(sender Contact) {
 
 func (n *Node) HandleStore(sender Contact, key NodeID, value []byte) {
 	n.RoutingTable.Update(sender)
-	// Store logic here
+	
+	// Actually store the data in local storage
+	n.StorageMux.Lock()
+	n.Storage[key] = value
+	n.StorageMux.Unlock()
+	
+	fmt.Printf("[SERVER] ✓ Stored %d bytes for key %s (from %s)\n", 
+		len(value), key.String()[:16], sender.ID.String()[:16])
 }
 
 func (n *Node) HandleFindValue(sender Contact, key NodeID) ([]byte, []Contact) {
 	n.RoutingTable.Update(sender)
-	// Value logic here
+	
+	// Check if we have the value locally
+	n.StorageMux.RLock()
+	value, exists := n.Storage[key]
+	n.StorageMux.RUnlock()
+	
+	if exists {
+		fmt.Printf("[SERVER] ✓ Found value for key %s (returning %d bytes to %s)\n", 
+			key.String()[:16], len(value), sender.ID.String()[:16])
+		return value, nil // Return the value, no contacts needed
+	}
+	
+	// Don't have it - return closest nodes who might have it
+	fmt.Printf("[SERVER] ✗ Key %s not found locally, returning closest nodes to %s\n", 
+		key.String()[:16], sender.ID.String()[:16])
 	return nil, n.RoutingTable.GetClosestNodes(key, 20)
 }
 
@@ -302,4 +324,111 @@ func (n *Node) HandleJoinResponse(sender Contact, payload JoinResponsePayload) (
 	fmt.Printf("[SERVER] ✓ Peer %s successfully joined and added to DHT!\n", sender.ID.String()[:16])
 
 	return JoinAckPayload{Success: true, Message: "Welcome to the DHT network!"}, nil
+}
+
+// ---------------------------------------------------------
+// CLIENT-SIDE DHT OPERATIONS (Store & Retrieve)
+// ---------------------------------------------------------
+
+// Store stores a key-value pair in the DHT by replicating it to K closest nodes
+func (n *Node) Store(key NodeID, value []byte) error {
+	fmt.Printf("[DHT-STORE] Storing key %s (%d bytes)...\n", key.String()[:16], len(value))
+
+	// 1. Find K closest nodes to this key using NodeLookup
+	closestNodes := n.NodeLookup(key)
+
+	if len(closestNodes) == 0 {
+		fmt.Printf("[DHT-STORE] ✗ No nodes found in network, storing only locally\n")
+		// Store locally at least
+		n.StorageMux.Lock()
+		n.Storage[key] = value
+		n.StorageMux.Unlock()
+		return fmt.Errorf("no nodes available for replication")
+	}
+
+	// 2. Replicate to all K closest nodes
+	successCount := 0
+	for _, contact := range closestNodes {
+		// Don't send to ourselves
+		if contact.ID == n.Self.ID {
+			continue
+		}
+
+		fmt.Printf("[DHT-STORE] Replicating to node %s at %s:%d\n",
+			contact.ID.String()[:16], contact.IP, contact.Port)
+
+		err := n.Network.SendStore(contact, key, value)
+		if err == nil {
+			successCount++
+			fmt.Printf("[DHT-STORE] ✓ Successfully replicated to %s\n", contact.ID.String()[:16])
+		} else {
+			fmt.Printf("[DHT-STORE] ✗ Failed to replicate to %s: %v\n", contact.ID.String()[:16], err)
+		}
+	}
+
+	// 3. Also store locally (we might be one of the closest nodes)
+	n.StorageMux.Lock()
+	n.Storage[key] = value
+	n.StorageMux.Unlock()
+	fmt.Printf("[DHT-STORE] ✓ Stored locally\n")
+
+	fmt.Printf("[DHT-STORE] ✓ Complete: stored at %d remote nodes + local = %d total locations\n",
+		successCount, successCount+1)
+
+	return nil
+}
+
+// FindValue retrieves a value from the DHT by querying nodes closest to the key
+func (n *Node) FindValue(key NodeID) ([]byte, error) {
+	fmt.Printf("[DHT-FIND] Searching for key %s...\n", key.String()[:16])
+
+	// 1. Check locally first
+	n.StorageMux.RLock()
+	value, exists := n.Storage[key]
+	n.StorageMux.RUnlock()
+
+	if exists {
+		fmt.Printf("[DHT-FIND] ✓ Found locally (%d bytes)\n", len(value))
+		return value, nil
+	}
+
+	fmt.Printf("[DHT-FIND] Not found locally, querying network...\n")
+
+	// 2. Find closest nodes to this key
+	closestNodes := n.NodeLookup(key)
+
+	if len(closestNodes) == 0 {
+		return nil, fmt.Errorf("key not found: no nodes in network")
+	}
+
+	// 3. Query each closest node until we find the value
+	for _, contact := range closestNodes {
+		// Skip ourselves (already checked locally)
+		if contact.ID == n.Self.ID {
+			continue
+		}
+
+		fmt.Printf("[DHT-FIND] Querying node %s at %s:%d\n",
+			contact.ID.String()[:16], contact.IP, contact.Port)
+
+		value, found, err := n.Network.SendFindValue(contact, key)
+		if err != nil {
+			fmt.Printf("[DHT-FIND] ✗ Failed to query %s: %v\n", contact.ID.String()[:16], err)
+			continue
+		}
+
+		if found {
+			fmt.Printf("[DHT-FIND] ✓ Found at node %s (%d bytes)\n",
+				contact.ID.String()[:16], len(value))
+			// Store locally for caching
+			n.StorageMux.Lock()
+			n.Storage[key] = value
+			n.StorageMux.Unlock()
+			return value, nil
+		}
+
+		fmt.Printf("[DHT-FIND] ✗ Node %s doesn't have the key\n", contact.ID.String()[:16])
+	}
+
+	return nil, fmt.Errorf("key not found in DHT")
 }
