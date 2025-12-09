@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DHT URL Sharing</title>
+    <style>
+        body { font-family: 'Segoe UI', sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; background: #f4f4f9; }
+        .container { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); margin-bottom: 20px; }
+        h2 { margin-top: 0; color: #333; }
+        input, textarea { width: 100%; padding: 10px; margin: 10px 0; border: 1px solid #ddd; border-radius: 4px; box-sizing: border-box; }
+        button { background: #28a745; color: white; padding: 10px 20px; border: none; border-radius: 4px; cursor: pointer; font-size: 16px; }
+        button:hover { background: #218838; }
+        button.secondary { background: #007bff; }
+        button.secondary:hover { background: #0056b3; }
+        
+        .status-bar { display: flex; justify-content: space-between; font-size: 0.9em; color: #666; margin-bottom: 20px; }
+        #logs { background: #333; color: #0f0; padding: 15px; height: 200px; overflow-y: auto; font-family: monospace; border-radius: 5px; }
+        .log-entry { margin-bottom: 5px; border-bottom: 1px solid #444; }
+        .success { color: #0f0; } .error { color: #f55; } .info { color: #ddd; }
+        
+        #resultArea { margin-top: 10px; padding: 10px; background: #e9ecef; border-left: 5px solid #007bff; display: none; }
+    </style>
+</head>
+<body>
+
+    <div class="status-bar">
+        <span id="nodeId">Node ID: Connecting...</span>
+        <span id="peerCount">Known Peers: 0</span>
+    </div>
+
+    <div class="container">
+        <h2>📤 Publish Resource</h2>
+        <p>Store a URL or text content in the decentralized network.</p>
+        <input type="text" id="storeKey" placeholder="Enter a Key (e.g., 'funny-cat-video')">
+        <input type="text" id="storeValue" placeholder="Enter Value (e.g., 'https://youtube.com/watch?v=...')">
+        <button onclick="storeData()">Publish to DHT</button>
+    </div>
+
+    <div class="container">
+        <h2>📥 Retrieve Resource</h2>
+        <p>Find content stored by any peer in the network.</p>
+        <input type="text" id="searchKey" placeholder="Enter Key to Search (e.g., 'funny-cat-video')">
+        <button class="secondary" onclick="retrieveData()">Find Value</button>
+        
+        <div id="resultArea">
+            <strong>Found Value:</strong> <span id="foundValue"></span>
+        </div>
+    </div>
+
+    <div class="container">
+        <h3>Network Logs</h3>
+        <div id="logs"></div>
+    </div>
+
+    <div class="panel">
+        <h2>Routing Table</h2>
+        <button onclick="fetchRoutingTable()">Show Routing Table</button>
+        <div id="routingTableDisplay" style="margin-top:10px; font-family: monospace; white-space: pre;"></div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>

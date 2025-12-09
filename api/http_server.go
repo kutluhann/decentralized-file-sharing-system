@@ -63,11 +63,17 @@ func NewHTTPServer(node *dht.Node, port int) *HTTPServer {
 
 // Start begins listening for HTTP requests
 func (s *HTTPServer) Start() error {
+
+	// SERVE FRONTEND FILES
+	fs := http.FileServer(http.Dir("./frontend"))
+	http.Handle("/", fs)
+
 	// Set up routes
 	http.HandleFunc("/store", s.handleStore)
 	http.HandleFunc("/get", s.handleGet)
 	http.HandleFunc("/status", s.handleStatus)
 	http.HandleFunc("/health", s.handleHealth)
+	http.HandleFunc("/routing-table", s.handleRoutingTable)
 
 	addr := fmt.Sprintf(":%d", s.Port)
 	fmt.Printf("[HTTP-API] Starting HTTP server on %s\n", addr)
@@ -107,6 +113,7 @@ func (s *HTTPServer) handleStore(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Hash the key to get NodeID
+	// TODO: Burada Kaan'ın fonksiyonları kullanmmız gerekmez mi?
 	keyHash := sha256.Sum256([]byte(req.Key))
 	nodeID := dht.NodeID(keyHash)
 	keyHashHex := hex.EncodeToString(keyHash[:])
@@ -217,7 +224,7 @@ func (s *HTTPServer) handleStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := StatusResponse{
-		NodeID:        s.Node.Self.ID.String()[:16] + "...",
+		NodeID:        s.Node.Self.ID.String()/*[:16] + "..."*/,
 		IP:            s.Node.Self.IP,
 		Port:          s.Node.Self.Port,
 		StoredKeys:    storedKeys,
@@ -242,3 +249,12 @@ func (s *HTTPServer) handleHealth(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// The Handler
+func (s *HTTPServer) handleRoutingTable(w http.ResponseWriter, r *http.Request) {
+    // Enable CORS if running frontend separately
+	w.Header().Set("Access-Control-Allow-Origin", "*") 
+    w.Header().Set("Content-Type", "application/json")
+    
+    tableInfo := s.Node.GetRoutingTableInfo()
+    json.NewEncoder(w).Encode(tableInfo)
+}

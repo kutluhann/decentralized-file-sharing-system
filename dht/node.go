@@ -218,6 +218,31 @@ func (n *Node) HandleFindValue(sender Contact, key NodeID) ([]byte, []Contact) {
 	return nil, n.RoutingTable.GetClosestNodes(key, 20)
 }
 
+// BucketInfo represents a single bucket for JSON output
+type BucketInfo struct {
+	Index    int       `json:"index"`
+	Contacts []Contact `json:"contacts"`
+}
+
+// GetRoutingTableInfo returns a snapshot of all non-empty buckets
+func (n *Node) GetRoutingTableInfo() []BucketInfo {
+	n.RoutingTable.mutex.RLock() // Use the public field 'mutex' directly if exposed, or add getter
+	defer n.RoutingTable.mutex.RUnlock()
+
+	var info []BucketInfo
+
+	for i, bucket := range n.RoutingTable.Buckets {
+		if bucket.Len() > 0 {
+			contacts := bucket.GetContacts()
+			info = append(info, BucketInfo{
+				Index:    i,
+				Contacts: contacts,
+			})
+		}
+	}
+	return info
+}
+
 // --- Handshake Handlers ---
 
 // HandleJoinRequest is called by the server node when a new node wants to join

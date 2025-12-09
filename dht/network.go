@@ -65,7 +65,7 @@ func (s *Network) SetHandler(h MessageHandler) {
 
 func (s *Network) Listen() {
 	fmt.Println("Listening for UDP packets on", s.Conn.LocalAddr().String())
-	buf := make([]byte, 4096)
+	buf := make([]byte, 65535) // buffer size is increased to maximum to avoid network failures
 
 	for {
 		n, remoteAddr, err := s.Conn.ReadFromUDP(buf)
