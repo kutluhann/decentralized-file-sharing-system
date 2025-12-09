@@ -141,51 +141,77 @@ getBtn.addEventListener('click', async () => {
     if (metadataResult.success && metadataResult.filename) {
       defaultFilename = metadataResult.filename;
       showStatus(getStatus, 'info', 
-        `Found file: ${defaultFilename}. Choose where to save...`);
+        `Found file: ${defaultFilename}. Downloading...`);
     } else {
-      showStatus(getStatus, 'info', 'Choose where to save file...');
+      showStatus(getStatus, 'info', 'Downloading file...');
     }
 
-    // Step 3: Ask user where to save with original filename as default
+    // Step 3: Download file from file-storage server to memory
+    const downloadResult = await window.electronAPI.downloadFile({
+      fileStorageUrl: storageAddress,
+      hash: fileHash
+    });
+
+    if (!downloadResult.success) {
+      showStatus(getStatus, 'error', `Failed to download file: ${downloadResult.error}`);
+      getBtn.disabled = false;
+      return;
+    }
+
+    showStatus(getStatus, 'info', 'Verifying file integrity...');
+
+    // Step 4: Check integrity before asking where to save
+    const calculatedHashResult = await window.electronAPI.getFileHash({
+      fileBuffer: downloadResult.buffer
+    });
+
+    if (!calculatedHashResult.success) {
+      showStatus(getStatus, 'error', `Failed to calculate hash: ${calculatedHashResult.error}`);
+      getBtn.disabled = false;
+      return;
+    }
+
+    if (calculatedHashResult.hash !== fileHash) {
+      showStatus(getStatus, 'error', 
+        `⚠️ File integrity check FAILED!<br>` +
+        `Expected: ${fileHash}<br>` +
+        `Received: ${calculatedHashResult.hash}<br>` +
+        `The file may be corrupted or tampered with.`);
+      getBtn.disabled = false;
+      return;
+    }
+
+    // Step 5: Integrity verified! Now ask user where to save
+    showStatus(getStatus, 'info', 
+      `✓ Integrity verified! Choose where to save ${defaultFilename}...`);
+
     const savePath = await window.electronAPI.showSaveDialog(defaultFilename);
     if (!savePath) {
-      showStatus(getStatus, 'info', 'Download cancelled by user');
+      showStatus(getStatus, 'info', 'Save cancelled by user. File was verified but not saved.');
       getBtn.disabled = false;
       return;
     }
 
-    showStatus(getStatus, 'info', 'Downloading file...');
+    // Step 6: Save the verified file
+    showStatus(getStatus, 'info', 'Saving file...');
 
-    // Step 4: Download file from file-storage server
-    const fileResult = await window.electronAPI.getFile({
-      fileStorageUrl: storageAddress,
-      hash: fileHash,
-      savePath: savePath,
+    const saveResult = await window.electronAPI.saveFile({
+      buffer: downloadResult.buffer,
+      savePath: savePath
     });
 
-    if (!fileResult.success) {
-      showStatus(getStatus, 'error', `Failed to download file: ${fileResult.error}`);
-      getBtn.disabled = false;
-      return;
-    }
-
-    // Step 5 - Check integrity
-    const calculatedHashResult = await window.electronAPI.getFileHash({
-      fileBuffer: fileResult.buffer,
-    });
-
-    if(calculatedHashResult.success && calculatedHashResult.hash !== fileHash) {
-      showStatus(getStatus, 'error', 
-        `File integrity check failed! Expected hash: ${fileHash}, Received hash: ${calculatedHashResult.hash}`);
+    if (!saveResult.success) {
+      showStatus(getStatus, 'error', `Failed to save file: ${saveResult.error}`);
       getBtn.disabled = false;
       return;
     }
 
     // Success!
     showStatus(getStatus, 'success', 
-      `✓ File retrieved successfully!<br>` +
-      `<strong>Saved to:</strong> ${fileResult.savedPath}<br>` +
-      `<strong>Size:</strong> ${formatBytes(fileResult.size)}<br>` +
+      `✓ File retrieved and verified successfully!<br>` +
+      `<strong>Saved to:</strong> ${saveResult.savedPath}<br>` +
+      `<strong>Size:</strong> ${formatBytes(downloadResult.size)}<br>` +
+      `<strong>Hash verified:</strong> ✓<br>` +
       `<strong>Storage Address:</strong> <div class="hash-display">${storageAddress}</div>`);
 
   } catch (error) {

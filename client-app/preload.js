@@ -6,7 +6,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   storeToDHT: (data) => ipcRenderer.invoke('store-to-dht', data),
   getFromDHT: (data) => ipcRenderer.invoke('get-from-dht', data),
   getFileMetadata: (data) => ipcRenderer.invoke('get-file-metadata', data),
-  getFile: (data) => ipcRenderer.invoke('get-file', data),
+  downloadFile: (data) => ipcRenderer.invoke('download-file', data),
+  saveFile: (data) => ipcRenderer.invoke('save-file', data),
   showSaveDialog: (defaultName) => ipcRenderer.invoke('show-save-dialog', defaultName),
   getFileHash: (data) => ipcRenderer.invoke('get-file-hash', data)
 });

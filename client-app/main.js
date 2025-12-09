@@ -3,6 +3,9 @@ const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
 const axios = require('axios');
+const os = require('os');
+
+const FILE_SALT = 'dfss-ulak-bibliotheca';
 
 let mainWindow;
 
@@ -177,21 +180,34 @@ ipcMain.handle('get-file-metadata', async (event, { fileStorageUrl, hash }) => {
   }
 });
 
-// Get file from file-storage server
-ipcMain.handle('get-file', async (event, { fileStorageUrl, hash, savePath }) => {
+// Download file from file-storage server (doesn't save yet, just downloads to temp)
+ipcMain.handle('download-file', async (event, { fileStorageUrl, hash }) => {
   try {
     const response = await axios.get(`${fileStorageUrl}/files/${hash}`, {
       responseType: 'arraybuffer'
     });
 
-    // Save the file
-    fs.writeFileSync(savePath, Buffer.from(response.data));
+    return {
+      success: true,
+      buffer: Array.from(Buffer.from(response.data)), // Convert to array for IPC
+      size: response.data.byteLength
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: error.message
+    };
+  }
+});
+
+// Save file buffer to specified path
+ipcMain.handle('save-file', async (event, { buffer, savePath }) => {
+  try {
+    fs.writeFileSync(savePath, Buffer.from(buffer));
 
     return {
       success: true,
-      savedPath: savePath,
-      size: response.data.byteLength,
-      buffer: response.data
+      savedPath: savePath
     };
   } catch (error) {
     return {
@@ -219,13 +235,13 @@ ipcMain.handle('show-save-dialog', async (event, defaultName) => {
 // Hash with salt to check integrity
 ipcMain.handle('get-file-hash', async (event, { fileBuffer }) => {
   try {
-    
+    const buffer = Buffer.from(fileBuffer);
     const hash = crypto.createHash('sha256')
       .update(FILE_SALT)
-      .update(fileBuffer)
+      .update(buffer)
       .digest('hex');
 
-      return { success: true, hash: hash };
+    return { success: true, hash: hash };
 
   } catch (error) {
     return {
