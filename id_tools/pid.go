@@ -7,12 +7,18 @@ import (
 	"crypto/sha256"
 	"log"
 	"os"
+	"path/filepath"
 
 	"github.com/kutluhann/decentralized-file-sharing-system/constants"
 )
 
-// constant for file storage path
-const PrivateKeyFilePath = "private_key.pem"
+// PrivateKeyFilePath is the path to the private key file
+var PrivateKeyFilePath = "private_key.pem"
+
+// SetDataDirectory sets the data directory for storing private keys
+func SetDataDirectory(dir string) {
+	PrivateKeyFilePath = filepath.Join(dir, "private_key.pem")
+}
 
 var ellipticCurve = elliptic.P256()
 

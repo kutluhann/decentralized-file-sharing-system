@@ -19,14 +19,33 @@ func main() {
 	port := flag.Int("port", 8080, "UDP port to listen on")
 	httpPort := flag.Int("http", 8000, "HTTP API port for client requests")
 	bootstrapIP := flag.String("bootstrap", "", "Bootstrap Node IP:Port (e.g. 127.0.0.1:8080)")
+	nodeID := flag.String("node-id", "", "Unique node identifier for data directory (e.g., node_0, node_1)")
 	flag.Parse()
 
 	fmt.Printf("Starting DHT Node on port %d...\n", *port)
 
+	// Setup data directory
+	var dataDir string
+	if *nodeID != "" {
+		dataDir = fmt.Sprintf("data/%s", *nodeID)
+	} else {
+		dataDir = "data/default"
+	}
+
+	// Create data directory if it doesn't exist
+	if err := os.MkdirAll(dataDir, 0755); err != nil {
+		log.Fatalf("Failed to create data directory: %v", err)
+	}
+
+	fmt.Printf("Using data directory: %s\n", dataDir)
+
+	// Set the data directory for id_tools
+	id_tools.SetDataDirectory(dataDir)
+
 	var privateKey *ecdsa.PrivateKey
 	var peerID id_tools.PeerID
 
-	keyFile := "private_key.pem"
+	keyFile := id_tools.PrivateKeyFilePath
 
 	if _, err := os.Stat(keyFile); err == nil {
 		fmt.Println("Loading existing private key from", keyFile)

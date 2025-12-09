@@ -22,8 +22,15 @@ WORKDIR /root/
 # Copy the binary from builder
 COPY --from=builder /app/dht-node .
 
+# Copy entrypoint script
+COPY entrypoint.sh .
+RUN chmod +x entrypoint.sh
+
+# Create data directory
+RUN mkdir -p /root/data
+
 # Expose UDP port
 EXPOSE 8080/udp
 
 # Run the application
-ENTRYPOINT ["./dht-node"]
+ENTRYPOINT ["./entrypoint.sh"]

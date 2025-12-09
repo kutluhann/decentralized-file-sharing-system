@@ -36,3 +36,6 @@ go.work.sum
 private_key.pem
 
 sim_data/
+
+# persistent data directory
+data/

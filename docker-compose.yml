@@ -2,12 +2,15 @@ services:
   bootstrap:
     build: .
     container_name: dht-bootstrap
+    hostname: bootstrap
     command: ["-genesis", "-port", "8080", "-http", "8000"]
     networks:
       - dht-network
     ports:
       - "8080:8080/udp"
       - "8000:8000"
+    volumes:
+      - ./data:/data
     restart: unless-stopped
 
   dht-node:
@@ -21,6 +24,9 @@ services:
     ports:
       - "10000-11800:8080/udp"
       - "12000-13800:8000"
+    
+    volumes:
+      - ./data:/data
     
     restart: unless-stopped
 
