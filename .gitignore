@@ -36,3 +36,5 @@ go.work.sum
 private_key.pem
 
 sim_data/
+
+.node_counter
