@@ -27,6 +27,12 @@ type PendingChallenge struct {
 	PubKey    []byte
 }
 
+// ReplicationTimer tracks the ticker and cancel channel for a key's replication
+type ReplicationTimer struct {
+	Ticker *time.Ticker
+	Stop   chan bool
+}
+
 type Node struct {
 	Self              Contact
 	RoutingTable      *RoutingTable
@@ -36,6 +42,8 @@ type Node struct {
 	Network           *Network
 	PendingChallenges map[NodeID]PendingChallenge // For server side: track challenges sent to peers
 	ChallengeMutex    sync.RWMutex
+	ReplicationTimers map[NodeID]*ReplicationTimer // Timers for periodic re-replication of stored keys
+	TimerMutex        sync.RWMutex                 // Mutex for thread-safe timer access
 }
 
 // CreateNode initializes the DHT node using the identity from config.
@@ -46,6 +54,7 @@ func NewNode(contact Contact, privateKey *ecdsa.PrivateKey) *Node {
 		Storage:           make(map[NodeID][]byte), // Initialize storage map
 		PrivKey:           privateKey,
 		PendingChallenges: make(map[NodeID]PendingChallenge),
+		ReplicationTimers: make(map[NodeID]*ReplicationTimer), // Initialize replication timers map
 	}
 }
 
@@ -196,6 +205,67 @@ func (n *Node) HandleStore(sender Contact, key NodeID, value []byte) {
 	
 	fmt.Printf("[SERVER] ✓ Stored %d bytes for key %s (from %s)\n", 
 		len(value), key.String()[:16], sender.ID.String()[:16])
+	
+	// Start or restart the replication timer for this key
+	n.startReplicationTimer(key, value)
+}
+
+// startReplicationTimer starts or restarts a recurring timer for re-replicating a key-value pair
+func (n *Node) startReplicationTimer(key NodeID, value []byte) {
+	n.TimerMutex.Lock()
+	defer n.TimerMutex.Unlock()
+	
+	// Stop existing timer if one exists for this key
+	if existingTimer, exists := n.ReplicationTimers[key]; exists {
+		existingTimer.Ticker.Stop()
+		close(existingTimer.Stop)
+		fmt.Printf("[TIMER] Stopped existing replication timer for key %s\n", key.String()[:16])
+	}
+	
+	// Create a new recurring timer using a ticker
+	ticker := time.NewTicker(1 * time.Minute)
+	stopChan := make(chan bool)
+	
+	// Store the timer tracking structure
+	n.ReplicationTimers[key] = &ReplicationTimer{
+		Ticker: ticker,
+		Stop:   stopChan,
+	}
+	
+	// Start the replication goroutine
+	go func(k NodeID) {
+		for {
+			select {
+			case <-ticker.C:
+				// Get the current value from storage (it might have been updated)
+				n.StorageMux.RLock()
+				currentValue, exists := n.Storage[k]
+				n.StorageMux.RUnlock()
+				
+				if !exists {
+					// Key was deleted, stop the ticker
+					ticker.Stop()
+					n.TimerMutex.Lock()
+					delete(n.ReplicationTimers, k)
+					n.TimerMutex.Unlock()
+					fmt.Printf("[TIMER] Key %s no longer in storage, stopping replication\n", k.String()[:16])
+					return
+				}
+				
+				fmt.Printf("[TIMER] Replication timer triggered for key %s, re-storing to network...\n", k.String()[:16])
+				// Call the Store function which will send STORE messages to k closest nodes
+				n.Store(k, currentValue)
+				
+			case <-stopChan:
+				// Received stop signal
+				ticker.Stop()
+				fmt.Printf("[TIMER] Replication timer stopped for key %s\n", k.String()[:16])
+				return
+			}
+		}
+	}(key)
+	
+	fmt.Printf("[TIMER] Started replication timer for key %s (will trigger every 1 minute)\n", key.String()[:16])
 }
 
 func (n *Node) HandleFindValue(sender Contact, key NodeID) ([]byte, []Contact) {
@@ -396,6 +466,9 @@ func (n *Node) Store(key NodeID, value []byte) error {
 	n.Storage[key] = value
 	n.StorageMux.Unlock()
 	fmt.Printf("[DHT-STORE] ✓ Stored locally\n")
+	
+	// Start replication timer for this key
+	n.startReplicationTimer(key, value)
 
 	fmt.Printf("[DHT-STORE] ✓ Complete: stored at %d remote nodes + local = %d total locations\n",
 		successCount, successCount+1)
