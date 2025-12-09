@@ -190,7 +190,8 @@ ipcMain.handle('get-file', async (event, { fileStorageUrl, hash, savePath }) => 
     return {
       success: true,
       savedPath: savePath,
-      size: response.data.byteLength
+      size: response.data.byteLength,
+      buffer: response.data
     };
   } catch (error) {
     return {
@@ -212,4 +213,24 @@ ipcMain.handle('show-save-dialog', async (event, defaultName) => {
   }
 
   return result.filePath;
+});
+
+
+// Hash with salt to check integrity
+ipcMain.handle('get-file-hash', async (event, { fileBuffer }) => {
+  try {
+    
+    const hash = crypto.createHash('sha256')
+      .update(FILE_SALT)
+      .update(fileBuffer)
+      .digest('hex');
+
+      return { success: true, hash: hash };
+
+  } catch (error) {
+    return {
+      success: false,
+      error: error.message
+    };
+  }
 });

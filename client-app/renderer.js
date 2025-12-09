@@ -1,8 +1,9 @@
 let selectedFile = null;
 
+const FILE_SALT = 'dfss-ulak-bibliotheca'
+
 // DOM elements
 const fileStorageUrlInput = document.getElementById('fileStorageUrl');
-const fileSaltInput = document.getElementById('fileSalt');
 const dhtNodeUrlInput = document.getElementById('dhtNodeUrl');
 const selectedFileInfo = document.getElementById('selectedFileInfo');
 const selectFileBtn = document.getElementById('selectFileBtn');
@@ -32,7 +33,7 @@ storeBtn.addEventListener('click', async () => {
   }
 
   const fileStorageUrl = fileStorageUrlInput.value.trim();
-  const fileSalt = fileSaltInput.value.trim();
+  const fileSalt = FILE_SALT;
   const dhtNodeUrl = dhtNodeUrlInput.value.trim();
 
   if (!fileStorageUrl || !fileSalt || !dhtNodeUrl) {
@@ -159,11 +160,23 @@ getBtn.addEventListener('click', async () => {
     const fileResult = await window.electronAPI.getFile({
       fileStorageUrl: storageAddress,
       hash: fileHash,
-      savePath: savePath
+      savePath: savePath,
     });
 
     if (!fileResult.success) {
       showStatus(getStatus, 'error', `Failed to download file: ${fileResult.error}`);
+      getBtn.disabled = false;
+      return;
+    }
+
+    // Step 5 - Check integrity
+    const calculatedHashResult = await window.electronAPI.getFileHash({
+      fileBuffer: fileResult.buffer,
+    });
+
+    if(calculatedHashResult.success && calculatedHashResult.hash !== fileHash) {
+      showStatus(getStatus, 'error', 
+        `File integrity check failed! Expected hash: ${fileHash}, Received hash: ${calculatedHashResult.hash}`);
       getBtn.disabled = false;
       return;
     }
