@@ -147,6 +147,36 @@ ipcMain.handle('get-from-dht', async (event, { dhtNodeUrl, key }) => {
   }
 });
 
+// Get file metadata from file-storage server
+ipcMain.handle('get-file-metadata', async (event, { fileStorageUrl, hash }) => {
+  try {
+    const response = await axios.head(`${fileStorageUrl}/files/${hash}`);
+    
+    // Extract filename from Content-Disposition header
+    const contentDisposition = response.headers['content-disposition'];
+    let filename = 'downloaded-file';
+    
+    if (contentDisposition) {
+      const filenameMatch = contentDisposition.match(/filename="(.+)"|filename=([^;]+)/);
+      if (filenameMatch) {
+        filename = filenameMatch[1] || filenameMatch[2];
+      }
+    }
+    
+    return {
+      success: true,
+      filename: filename,
+      contentType: response.headers['content-type'],
+      contentLength: response.headers['content-length']
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: error.message
+    };
+  }
+});
+
 // Get file from file-storage server
 ipcMain.handle('get-file', async (event, { fileStorageUrl, hash, savePath }) => {
   try {

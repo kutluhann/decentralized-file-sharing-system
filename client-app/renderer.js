@@ -128,17 +128,34 @@ getBtn.addEventListener('click', async () => {
     // The value should be the same as the key (file hash)
     const storageAddress = dhtResult.data.value;
     showStatus(getStatus, 'info', 
-      `Found in DHT! Downloading file...`);
+      `Found in DHT! Fetching file metadata...`);
 
-    // Step 2: Ask user where to save
-    const savePath = await window.electronAPI.showSaveDialog('downloaded-file');
+    // Step 2: Get file metadata to extract original filename
+    const metadataResult = await window.electronAPI.getFileMetadata({
+      fileStorageUrl: storageAddress,
+      hash: fileHash
+    });
+
+    let defaultFilename = 'downloaded-file';
+    if (metadataResult.success && metadataResult.filename) {
+      defaultFilename = metadataResult.filename;
+      showStatus(getStatus, 'info', 
+        `Found file: ${defaultFilename}. Choose where to save...`);
+    } else {
+      showStatus(getStatus, 'info', 'Choose where to save file...');
+    }
+
+    // Step 3: Ask user where to save with original filename as default
+    const savePath = await window.electronAPI.showSaveDialog(defaultFilename);
     if (!savePath) {
       showStatus(getStatus, 'info', 'Download cancelled by user');
       getBtn.disabled = false;
       return;
     }
 
-    // Step 3: Download file from file-storage server
+    showStatus(getStatus, 'info', 'Downloading file...');
+
+    // Step 4: Download file from file-storage server
     const fileResult = await window.electronAPI.getFile({
       fileStorageUrl: storageAddress,
       hash: fileHash,
