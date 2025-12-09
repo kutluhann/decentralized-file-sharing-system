@@ -66,7 +66,7 @@ storeBtn.addEventListener('click', async () => {
     const dhtResult = await window.electronAPI.storeToDHT({
       dhtNodeUrl,
       key: fileHash,
-      value: fileHash
+      value: fileStorageUrl
     });
 
     if (!dhtResult.success) {
@@ -126,7 +126,7 @@ getBtn.addEventListener('click', async () => {
     }
 
     // The value should be the same as the key (file hash)
-    const retrievedHash = dhtResult.data.value;
+    const storageAddress = dhtResult.data.value;
     showStatus(getStatus, 'info', 
       `Found in DHT! Downloading file...`);
 
@@ -140,8 +140,8 @@ getBtn.addEventListener('click', async () => {
 
     // Step 3: Download file from file-storage server
     const fileResult = await window.electronAPI.getFile({
-      fileStorageUrl,
-      hash: retrievedHash,
+      fileStorageUrl: storageAddress,
+      hash: fileHash,
       savePath: savePath
     });
 
@@ -156,7 +156,7 @@ getBtn.addEventListener('click', async () => {
       `✓ File retrieved successfully!<br>` +
       `<strong>Saved to:</strong> ${fileResult.savedPath}<br>` +
       `<strong>Size:</strong> ${formatBytes(fileResult.size)}<br>` +
-      `<strong>Hash:</strong> <div class="hash-display">${retrievedHash}</div>`);
+      `<strong>Storage Address:</strong> <div class="hash-display">${storageAddress}</div>`);
 
   } catch (error) {
     showStatus(getStatus, 'error', `Unexpected error: ${error.message}`);
