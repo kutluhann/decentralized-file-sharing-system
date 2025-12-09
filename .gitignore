@@ -34,3 +34,5 @@ go.work.sum
 
 # project related
 private_key.pem
+
+sim_data/
