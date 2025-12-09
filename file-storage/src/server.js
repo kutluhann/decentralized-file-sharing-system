@@ -9,7 +9,7 @@ const fsSync = require('fs');
 dotenv.config();
 
 const PORT = Number(process.env.PORT || 4000);
-const FILE_SALT = process.env.FILE_SALT || 'default_salt';
+const FILE_SALT = 'dfss-ulak-bibliotheca';
 const MAX_FILE_SIZE_MB = Number(process.env.MAX_FILE_SIZE_MB || 10);
 const MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024;
 const STORAGE_ROOT = path.join(__dirname, '..', 'storage');
