@@ -98,7 +98,8 @@ func (s *Network) handlePacket(data []byte, addr *net.UDPAddr) {
 	// Check if this is a response to a pending RPC call (client-side handling)
 	isResponse := msg.Type == PING_RES || msg.Type == FIND_NODE_RES ||
 		msg.Type == FIND_VALUE_RES || msg.Type == STORE_RES ||
-		msg.Type == JOIN_CHALLENGE || msg.Type == JOIN_ACK
+		msg.Type == JOIN_CHALLENGE || msg.Type == JOIN_ACK ||
+		msg.Type == POS_CHALLENGE
 
 	if isResponse {
 		// This is a response - route it to the waiting channel
@@ -178,12 +179,45 @@ func (s *Network) handlePacket(data []byte, addr *net.UDPAddr) {
 		var req JoinResponsePayload
 		json.Unmarshal(payloadBytes, &req)
 
-		ack, err := s.Handler.HandleJoinResponse(sender, req)
+		// After signature verification, send PoS challenge
+		_, err := s.Handler.HandleJoinResponse(sender, req)
 		if err != nil {
 			s.sendResponse(msg.RPCID, JOIN_ACK, JoinAckPayload{Success: false, Message: err.Error()}, addr)
 			return
 		}
-		s.sendResponse(msg.RPCID, JOIN_ACK, ack, addr)
+		
+		// Signature verified, now send PoS challenge
+		if handler, ok := s.Handler.(interface {
+			HandlePosChallenge(sender Contact) (*PosChallengePayload, error)
+		}); ok {
+			posChallenge, err := handler.HandlePosChallenge(sender)
+			if err != nil {
+				s.sendResponse(msg.RPCID, JOIN_ACK, JoinAckPayload{Success: false, Message: "PoS challenge failed"}, addr)
+				return
+			}
+			s.sendResponse(msg.RPCID, POS_CHALLENGE, *posChallenge, addr)
+		} else {
+			// Fallback: no PoS support, just approve
+			s.sendResponse(msg.RPCID, JOIN_ACK, JoinAckPayload{Success: true, Message: "Welcome to the DHT network!"}, addr)
+		}
+
+	case POS_PROOF:
+		payloadBytes, _ := json.Marshal(msg.Payload)
+		var proof PosProofPayload
+		json.Unmarshal(payloadBytes, &proof)
+
+		if handler, ok := s.Handler.(interface {
+			HandlePosProof(sender Contact, payload PosProofPayload) (JoinAckPayload, error)
+		}); ok {
+			ack, err := handler.HandlePosProof(sender, proof)
+			if err != nil {
+				s.sendResponse(msg.RPCID, JOIN_ACK, JoinAckPayload{Success: false, Message: err.Error()}, addr)
+				return
+			}
+			s.sendResponse(msg.RPCID, JOIN_ACK, ack, addr)
+		} else {
+			s.sendResponse(msg.RPCID, JOIN_ACK, JoinAckPayload{Success: false, Message: "PoS not supported"}, addr)
+		}
 	}
 }
 

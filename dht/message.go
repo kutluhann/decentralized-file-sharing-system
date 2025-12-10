@@ -18,6 +18,10 @@ const (
 	JOIN_CHALLENGE // Step 2: Genesis -> NewNode (Here is a nonce, sign it)
 	JOIN_RES       // Step 3: NewNode -> Genesis (Here is the signature)
 	JOIN_ACK       // Step 4: Genesis -> NewNode (Welcome / Go Away)
+	
+	// Proof of Space for Sybil Resistance
+	POS_CHALLENGE  // Genesis -> NewNode (Prove you have allocated space)
+	POS_PROOF      // NewNode -> Genesis (Here is my PoS proof)
 )
 
 type Message struct {
@@ -78,4 +82,27 @@ type JoinResponsePayload struct {
 type JoinAckPayload struct {
 	Success bool   `json:"success"`
 	Message string `json:"message"`
+}
+
+type PosChallengePayload struct {
+	ChallengeValue [32]byte `json:"challenge_value"`
+	StartIndex     uint64   `json:"start_index"`
+	EndIndex       uint64   `json:"end_index"`
+	Required       int      `json:"required"`
+}
+
+type PosProofElement struct {
+	Layer       int      `json:"layer"`
+	Index       uint64   `json:"index"`
+	Value       [32]byte `json:"value"`
+	ParentLeft  uint64   `json:"parent_left"`
+	ParentRight uint64   `json:"parent_right"`
+}
+
+type PosProofPayload struct {
+	ChallengeValue [32]byte          `json:"challenge_value"`
+	StartIndex     uint64            `json:"start_index"`
+	EndIndex       uint64            `json:"end_index"`
+	Required       int               `json:"required"`
+	ProofChain     []PosProofElement `json:"proof_chain"`
 }
