@@ -257,15 +257,15 @@ func (n *Node) HandlePing(sender Contact) {
 
 func (n *Node) HandleStore(sender Contact, key NodeID, value []byte) {
 	n.RoutingTable.Update(sender)
-	
+
 	// Actually store the data in local storage
 	n.StorageMux.Lock()
 	n.Storage[key] = value
 	n.StorageMux.Unlock()
-	
-	fmt.Printf("[SERVER] ✓ Stored %d bytes for key %s (from %s)\n", 
+
+	fmt.Printf("[SERVER] ✓ Stored %d bytes for key %s (from %s)\n",
 		len(value), key.String()[:16], sender.ID.String()[:16])
-	
+
 	// Start or restart the replication timer for this key
 	n.startReplicationTimer(key, value)
 }
@@ -274,24 +274,24 @@ func (n *Node) HandleStore(sender Contact, key NodeID, value []byte) {
 func (n *Node) startReplicationTimer(key NodeID, value []byte) {
 	n.TimerMutex.Lock()
 	defer n.TimerMutex.Unlock()
-	
+
 	// Stop existing timer if one exists for this key
 	if existingTimer, exists := n.ReplicationTimers[key]; exists {
 		existingTimer.Ticker.Stop()
 		close(existingTimer.Stop)
 		fmt.Printf("[TIMER] Stopped existing replication timer for key %s\n", key.String()[:16])
 	}
-	
+
 	// Create a new recurring timer using a ticker
-	ticker := time.NewTicker(1 * time.Minute)
+	ticker := time.NewTicker(10 * time.Minute)
 	stopChan := make(chan bool)
-	
+
 	// Store the timer tracking structure
 	n.ReplicationTimers[key] = &ReplicationTimer{
 		Ticker: ticker,
 		Stop:   stopChan,
 	}
-	
+
 	// Start the replication goroutine
 	go func(k NodeID) {
 		for {
@@ -301,7 +301,7 @@ func (n *Node) startReplicationTimer(key NodeID, value []byte) {
 				n.StorageMux.RLock()
 				currentValue, exists := n.Storage[k]
 				n.StorageMux.RUnlock()
-				
+
 				if !exists {
 					// Key was deleted, stop the ticker
 					ticker.Stop()
@@ -311,11 +311,11 @@ func (n *Node) startReplicationTimer(key NodeID, value []byte) {
 					fmt.Printf("[TIMER] Key %s no longer in storage, stopping replication\n", k.String()[:16])
 					return
 				}
-				
+
 				fmt.Printf("[TIMER] Replication timer triggered for key %s, re-storing to network...\n", k.String()[:16])
 				// Call the Store function which will send STORE messages to k closest nodes
 				n.Store(k, currentValue)
-				
+
 			case <-stopChan:
 				// Received stop signal
 				ticker.Stop()
@@ -324,26 +324,26 @@ func (n *Node) startReplicationTimer(key NodeID, value []byte) {
 			}
 		}
 	}(key)
-	
-	fmt.Printf("[TIMER] Started replication timer for key %s (will trigger every 1 minute)\n", key.String()[:16])
+
+	fmt.Printf("[TIMER] Started replication timer for key %s (will trigger every 10 minutes)\n", key.String()[:16])
 }
 
 func (n *Node) HandleFindValue(sender Contact, key NodeID) ([]byte, []Contact) {
 	n.RoutingTable.Update(sender)
-	
+
 	// Check if we have the value locally
 	n.StorageMux.RLock()
 	value, exists := n.Storage[key]
 	n.StorageMux.RUnlock()
-	
+
 	if exists {
-		fmt.Printf("[SERVER] ✓ Found value for key %s (returning %d bytes to %s)\n", 
+		fmt.Printf("[SERVER] ✓ Found value for key %s (returning %d bytes to %s)\n",
 			key.String()[:16], len(value), sender.ID.String()[:16])
 		return value, nil // Return the value, no contacts needed
 	}
-	
+
 	// Don't have it - return closest nodes who might have it
-	fmt.Printf("[SERVER] ✗ Key %s not found locally, returning closest nodes to %s\n", 
+	fmt.Printf("[SERVER] ✗ Key %s not found locally, returning closest nodes to %s\n",
 		key.String()[:16], sender.ID.String()[:16])
 	return nil, n.RoutingTable.GetClosestNodes(key, 20)
 }
@@ -490,7 +490,7 @@ func (n *Node) Store(key NodeID, value []byte) error {
 	fmt.Printf("[DHT-STORE] Storing key %s (%d bytes)...\n", key.String()[:16], len(value))
 
 	// 1. Find K closest nodes to this key using NodeLookup
-	closestNodes := n.NodeLookup(key)
+	closestNodes, _ := n.NodeLookup(key)
 
 	if len(closestNodes) == 0 {
 		fmt.Printf("[DHT-STORE] ✗ No nodes found in network, storing only locally\n")
@@ -526,7 +526,7 @@ func (n *Node) Store(key NodeID, value []byte) error {
 	n.Storage[key] = value
 	n.StorageMux.Unlock()
 	fmt.Printf("[DHT-STORE] ✓ Stored locally\n")
-	
+
 	// Start replication timer for this key
 	n.startReplicationTimer(key, value)
 
@@ -536,59 +536,90 @@ func (n *Node) Store(key NodeID, value []byte) error {
 	return nil
 }
 
-// FindValue retrieves a value from the DHT by querying nodes closest to the key
-func (n *Node) FindValue(key NodeID) ([]byte, error) {
+// FindValue retrieves a value from the DHT using Kademlia iterative lookup
+// Returns: value, hopCount, error
+func (n *Node) FindValue(key NodeID) ([]byte, int, error) {
 	fmt.Printf("[DHT-FIND] Searching for key %s...\n", key.String()[:16])
 
-	// 1. Check locally first
+	// 1. Check locally first (hop count = 0)
 	n.StorageMux.RLock()
 	value, exists := n.Storage[key]
 	n.StorageMux.RUnlock()
 
 	if exists {
 		fmt.Printf("[DHT-FIND] ✓ Found locally (%d bytes)\n", len(value))
-		return value, nil
+		return value, 0, nil
 	}
 
-	fmt.Printf("[DHT-FIND] Not found locally, querying network...\n")
+	fmt.Printf("[DHT-FIND] Not found locally, starting iterative FIND_VALUE lookup...\n")
 
-	// 2. Find closest nodes to this key
-	closestNodes := n.NodeLookup(key)
-
-	if len(closestNodes) == 0 {
-		return nil, fmt.Errorf("key not found: no nodes in network")
+	// 2. Initialize lookup state with closest known nodes
+	localCandidates := n.RoutingTable.GetClosestNodes(key, 20) // K=20
+	if len(localCandidates) == 0 {
+		return nil, 0, fmt.Errorf("key not found: no nodes in network")
 	}
 
-	// 3. Query each closest node until we find the value
-	for _, contact := range closestNodes {
-		// Skip ourselves (already checked locally)
-		if contact.ID == n.Self.ID {
-			continue
+	state := NewLookupState(key, localCandidates)
+	hopCount := 0
+
+	// 3. ITERATIVE FIND_VALUE LOOP (Kademlia protocol)
+	// Unlike NodeLookup which uses FIND_NODE, this uses FIND_VALUE
+	for {
+		// A. Pick the next closest unqueried node
+		candidate := state.PickNextBest()
+
+		// TERMINATION: No more nodes to query
+		if candidate == nil {
+			fmt.Printf("[DHT-FIND] ✗ No more nodes to query, key not found (hops: %d)\n", hopCount)
+			break
 		}
 
-		fmt.Printf("[DHT-FIND] Querying node %s at %s:%d\n",
-			contact.ID.String()[:16], contact.IP, contact.Port)
+		// B. Send FIND_VALUE RPC
+		fmt.Printf("[DHT-FIND] [Hop %d] Querying node %s at %s:%d\n",
+			hopCount+1, candidate.ID.String()[:16], candidate.IP, candidate.Port)
 
-		value, found, err := n.Network.SendFindValue(contact, key)
+		hopCount++
+		value, nodes, err := n.Network.SendFindValue(*candidate, key)
+
+		// Mark as contacted to avoid re-querying
+		state.MarkContacted(candidate.ID)
+
+		// C. Handle errors
 		if err != nil {
-			fmt.Printf("[DHT-FIND] ✗ Failed to query %s: %v\n", contact.ID.String()[:16], err)
+			fmt.Printf("[DHT-FIND] ✗ Failed to query %s: %v\n", candidate.ID.String()[:16], err)
 			continue
 		}
 
-		if found {
-			fmt.Printf("[DHT-FIND] ✓ Found at node %s (%d bytes)\n",
-				contact.ID.String()[:16], len(value))
-			// Store locally for caching
-			n.StorageMux.Lock()
-			n.Storage[key] = value
-			n.StorageMux.Unlock()
-			return value, nil
+		// D. VALUE FOUND! (success case)
+		if value != nil {
+			fmt.Printf("[DHT-FIND] ✓ Found value at node %s (%d bytes) [hops: %d]\n",
+				candidate.ID.String()[:16], len(value), hopCount)
+
+			// Cache locally for future lookups
+			// n.StorageMux.Lock()
+			// n.Storage[key] = value
+			// n.StorageMux.Unlock()
+
+			return value, hopCount, nil
 		}
 
-		fmt.Printf("[DHT-FIND] ✗ Node %s doesn't have the key\n", contact.ID.String()[:16])
+		// E. VALUE NOT FOUND, but got closer nodes
+		// Add returned nodes to shortlist and continue iteration
+		if len(nodes) > 0 {
+			fmt.Printf("[DHT-FIND] Node %s doesn't have key, returned %d closer nodes\n",
+				candidate.ID.String()[:16], len(nodes))
+			state.Append(nodes)
+		} else {
+			fmt.Printf("[DHT-FIND] Node %s doesn't have key, no new nodes returned\n",
+				candidate.ID.String()[:16])
+		}
+
+		// Update routing table (node is alive)
+		n.RoutingTable.Update(*candidate)
 	}
 
-	return nil, fmt.Errorf("key not found in DHT")
+	// 4. Key not found after exhausting all nodes
+	return nil, hopCount, fmt.Errorf("key not found in DHT")
 }
 
 // ---------------------------------------------------------

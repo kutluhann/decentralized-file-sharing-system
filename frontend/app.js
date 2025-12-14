@@ -50,6 +50,8 @@ async function retrieveData() {
     const resultArea = document.getElementById('resultArea');
     const valueSpan = document.getElementById('foundValue');
     resultArea.style.display = 'none';
+    // Clear any previous hop badges
+    resultArea.querySelectorAll('.hop-badge').forEach(el => el.remove());
     
     log(`Searching DHT for key: '${key}'...`, "info");
 
@@ -62,7 +64,8 @@ async function retrieveData() {
 
         const data = await res.json();
         if (data.success) {
-            log(`✓ Found! Hash: ${data.key_hash}...`, "success");
+            const hopInfo = data.hop_count !== undefined ? ` [${data.hop_count} hops]` : '';
+            log(`✓ Found! Hash: ${data.key_hash.substring(0, 16)}...${hopInfo}`, "success");
             valueSpan.textContent = data.value;
             resultArea.style.display = 'block';
             
@@ -70,8 +73,18 @@ async function retrieveData() {
             if (data.value.startsWith('http')) {
                 valueSpan.innerHTML = `<a href="${data.value}" target="_blank">${data.value}</a>`;
             }
+            
+            // Show hop count if available
+            if (data.hop_count !== undefined) {
+                const hopBadge = document.createElement('div');
+                hopBadge.className = 'hop-badge';
+                hopBadge.style.cssText = 'margin-top: 10px; padding: 5px 10px; background: #28a745; color: white; display: inline-block; border-radius: 3px; font-size: 0.9em;';
+                hopBadge.textContent = `Found in ${data.hop_count} hop${data.hop_count !== 1 ? 's' : ''}`;
+                resultArea.appendChild(hopBadge);
+            }
         } else {
-            log(`✗ Not Found: ${data.message}`, "error");
+            const hopInfo = data.hop_count !== undefined ? ` [searched ${data.hop_count} hops]` : '';
+            log(`✗ Not Found: ${data.message}${hopInfo}`, "error");
         }
     } catch (err) {
         log(`Network Error: ${err.message}`, "error");

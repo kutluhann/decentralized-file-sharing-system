@@ -348,7 +348,8 @@ func (s *Network) SendStore(target Contact, key NodeID, value []byte) error {
 }
 
 // SendFindValue sends a FIND_VALUE request to retrieve a value from a remote node
-func (s *Network) SendFindValue(target Contact, key NodeID) ([]byte, bool, error) {
+// Returns: value (if found), nodes (closest nodes if not found), error
+func (s *Network) SendFindValue(target Contact, key NodeID) ([]byte, []Contact, error) {
 	rpcID := generateRPCID()
 
 	msg := Message{
@@ -369,14 +370,14 @@ func (s *Network) SendFindValue(target Contact, key NodeID) ([]byte, bool, error
 	addr := fmt.Sprintf("%s:%d", target.IP, target.Port)
 	err := s.SendMessage(msg, addr)
 	if err != nil {
-		return nil, false, fmt.Errorf("failed to send FIND_VALUE: %v", err)
+		return nil, nil, fmt.Errorf("failed to send FIND_VALUE: %v", err)
 	}
 
 	// Wait for response with timeout
 	select {
 	case resp := <-respChan:
 		if resp.Type != FIND_VALUE_RES {
-			return nil, false, fmt.Errorf("expected FIND_VALUE_RES, got %v", resp.Type)
+			return nil, nil, fmt.Errorf("expected FIND_VALUE_RES, got %v", resp.Type)
 		}
 
 		// Parse response payload
@@ -384,18 +385,19 @@ func (s *Network) SendFindValue(target Contact, key NodeID) ([]byte, bool, error
 		var findValueResp FindValueResponse
 		err := json.Unmarshal(payloadBytes, &findValueResp)
 		if err != nil {
-			return nil, false, fmt.Errorf("failed to parse FIND_VALUE response: %v", err)
+			return nil, nil, fmt.Errorf("failed to parse FIND_VALUE response: %v", err)
 		}
 
 		if findValueResp.Found {
-			return findValueResp.Value, true, nil
+			// Value found! Return it (nodes will be nil)
+			return findValueResp.Value, nil, nil
 		}
 
-		// Value not found at this node
-		return nil, false, nil
+		// Value not found, return closest nodes instead
+		return nil, findValueResp.Nodes, nil
 
 	case <-time.After(5 * time.Second):
-		return nil, false, fmt.Errorf("timeout waiting for FIND_VALUE response from %s", addr)
+		return nil, nil, fmt.Errorf("timeout waiting for FIND_VALUE response from %s", addr)
 	}
 }
 
