@@ -18,10 +18,10 @@ const (
 	JOIN_CHALLENGE // Step 2: Genesis -> NewNode (Here is a nonce, sign it)
 	JOIN_RES       // Step 3: NewNode -> Genesis (Here is the signature)
 	JOIN_ACK       // Step 4: Genesis -> NewNode (Welcome / Go Away)
-	
+
 	// Proof of Space for Sybil Resistance
-	POS_CHALLENGE  // Genesis -> NewNode (Prove you have allocated space)
-	POS_PROOF      // NewNode -> Genesis (Here is my PoS proof)
+	POS_CHALLENGE // Genesis -> NewNode (Prove you have allocated space)
+	POS_PROOF     // NewNode -> Genesis (Here is my PoS proof)
 )
 
 type Message struct {
@@ -85,24 +85,12 @@ type JoinAckPayload struct {
 }
 
 type PosChallengePayload struct {
-	ChallengeValue [32]byte `json:"challenge_value"`
-	StartIndex     uint64   `json:"start_index"`
-	EndIndex       uint64   `json:"end_index"`
-	Required       int      `json:"required"`
-}
-
-type PosProofElement struct {
-	Layer       int      `json:"layer"`
-	Index       uint64   `json:"index"`
-	Value       [32]byte `json:"value"`
-	ParentLeft  uint64   `json:"parent_left"`
-	ParentRight uint64   `json:"parent_right"`
+	PrefixBits uint8  `json:"prefix_bits"` // Number of prefix bits (T)
+	Prefix     []byte `json:"prefix"`      // The T-bit prefix to match
 }
 
 type PosProofPayload struct {
-	ChallengeValue [32]byte          `json:"challenge_value"`
-	StartIndex     uint64            `json:"start_index"`
-	EndIndex       uint64            `json:"end_index"`
-	Required       int               `json:"required"`
-	ProofChain     []PosProofElement `json:"proof_chain"`
+	RawValue string   `json:"raw_value"` // Format: "PeerID_Index" (hex)
+	Index    uint64   `json:"index"`     // The index value
+	Hash     [32]byte `json:"hash"`      // SHA256(RawValue) for verification
 }

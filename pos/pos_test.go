@@ -1,9 +1,12 @@
 package pos
 
 import (
+	"crypto/sha256"
+	"fmt"
 	"os"
 	"testing"
 
+	"github.com/kutluhann/decentralized-file-sharing-system/constants"
 	"github.com/kutluhann/decentralized-file-sharing-system/id_tools"
 )
 
@@ -14,10 +17,7 @@ func TestPlotGeneration(t *testing.T) {
 	testDir := "/tmp/pos_test"
 	defer os.RemoveAll(testDir)
 
-	// Use smaller size for testing (3 layers * 256 entries/layer * 48 bytes = 36KB)
-	plotSize := int64(3 * 256 * 48)
-
-	plot, err := GeneratePlot(peerID, plotSize, testDir)
+	plot, err := GeneratePlot(peerID, testDir)
 	if err != nil {
 		t.Fatalf("Failed to generate plot: %v", err)
 	}
@@ -27,19 +27,17 @@ func TestPlotGeneration(t *testing.T) {
 		t.Fatalf("Plot file was not created")
 	}
 
-	// Verify plot size
+	// Verify plot file size is correct
 	info, err := os.Stat(plot.FilePath)
 	if err != nil {
 		t.Fatalf("Failed to stat plot file: %v", err)
 	}
-	if info.Size() != plotSize {
-		t.Errorf("Plot size mismatch: expected %d, got %d", plotSize, info.Size())
+	expectedSize := int64(constants.PosNumEntries) * int64(8+32)
+	if info.Size() != expectedSize {
+		t.Errorf("Expected file size %d, got %d", expectedSize, info.Size())
 	}
 
-	// Verify layer count
-	if plot.Layers != 3 {
-		t.Errorf("Expected 3 layers, got %d", plot.Layers)
-	}
+	t.Logf("Plot generated successfully (file size: %d bytes)", info.Size())
 }
 
 func TestChallengeAndProof(t *testing.T) {
@@ -49,29 +47,24 @@ func TestChallengeAndProof(t *testing.T) {
 	testDir := "/tmp/pos_test_challenge"
 	defer os.RemoveAll(testDir)
 
-	plotSize := int64(3 * 256 * 48)
-
-	plot, err := GeneratePlot(peerID, plotSize, testDir)
+	plot, err := GeneratePlot(peerID, testDir)
 	if err != nil {
 		t.Fatalf("Failed to generate plot: %v", err)
 	}
 
-	challenge, err := GenerateChallenge(plotSize)
+	challenge, err := GenerateChallenge()
 	if err != nil {
 		t.Fatalf("Failed to generate challenge: %v", err)
 	}
 
-	proof, err := plot.GenerateProof(challenge)
+	t.Logf("Challenge: %d-bit prefix = %x", challenge.PrefixBits, challenge.Prefix)
+
+	proof, err := plot.SearchMatchingHash(challenge.PrefixBits, challenge.Prefix)
 	if err != nil {
-		t.Fatalf("Failed to generate proof: %v", err)
+		t.Fatalf("Failed to find matching hash: %v", err)
 	}
 
-	// Verify proof has elements
-	if len(proof.ProofChain) == 0 {
-		t.Fatalf("Proof chain is empty")
-	}
-
-	t.Logf("Proof chain length: %d elements", len(proof.ProofChain))
+	t.Logf("Found proof: RawValue=%s, Index=%d", proof.RawValue, proof.Index)
 
 	// Verify proof
 	if !VerifyProof(peerID, challenge, proof) {
@@ -85,38 +78,52 @@ func TestChallengeAndProof(t *testing.T) {
 	}
 }
 
-func TestProofWithModifiedChain(t *testing.T) {
+func TestProofVerification(t *testing.T) {
 	privateKey, peerID := id_tools.GenerateNewPID()
 	_ = privateKey
 
-	testDir := "/tmp/pos_test_tamper"
+	testDir := "/tmp/pos_test_verify"
 	defer os.RemoveAll(testDir)
 
-	plotSize := int64(3 * 256 * 48)
-
-	plot, err := GeneratePlot(peerID, plotSize, testDir)
+	plot, err := GeneratePlot(peerID, testDir)
 	if err != nil {
 		t.Fatalf("Failed to generate plot: %v", err)
 	}
 
-	challenge, err := GenerateChallenge(plotSize)
+	challenge, err := GenerateChallenge()
 	if err != nil {
 		t.Fatalf("Failed to generate challenge: %v", err)
 	}
 
-	proof, err := plot.GenerateProof(challenge)
+	proof, err := plot.SearchMatchingHash(challenge.PrefixBits, challenge.Prefix)
 	if err != nil {
-		t.Fatalf("Failed to generate proof: %v", err)
+		t.Fatalf("Failed to find matching hash: %v", err)
 	}
 
-	// Tamper with proof chain
-	if len(proof.ProofChain) > 0 {
-		proof.ProofChain[0].Value[0] ^= 0xFF // Flip bits in first byte
+	// Test 1: Valid proof should verify
+	if !VerifyProof(peerID, challenge, proof) {
+		t.Errorf("Valid proof failed verification")
 	}
 
-	// Verify tampered proof (should fail)
-	if VerifyProof(peerID, challenge, proof) {
-		t.Errorf("Tampered proof should not verify")
+	// Test 2: Tamper with hash (should fail)
+	tamperedProof := &Proof{
+		RawValue: proof.RawValue,
+		Index:    proof.Index,
+		Hash:     proof.Hash,
+	}
+	tamperedProof.Hash[0] ^= 0xFF
+	if VerifyProof(peerID, challenge, tamperedProof) {
+		t.Errorf("Tampered hash should not verify")
+	}
+
+	// Test 3: Tamper with raw value (should fail)
+	tamperedProof2 := &Proof{
+		RawValue: fmt.Sprintf("%x_%d", peerID, proof.Index+1),
+		Index:    proof.Index,
+		Hash:     proof.Hash,
+	}
+	if VerifyProof(peerID, challenge, tamperedProof2) {
+		t.Errorf("Tampered raw value should not verify")
 	}
 }
 
@@ -127,70 +134,69 @@ func TestPlotRegeneration(t *testing.T) {
 	testDir := "/tmp/pos_test_regen"
 	defer os.RemoveAll(testDir)
 
-	plotSize := int64(3 * 256 * 48)
-
 	// Generate plot first time
-	plot1, err := GeneratePlot(peerID, plotSize, testDir)
+	plot1, err := GeneratePlot(peerID, testDir)
 	if err != nil {
 		t.Fatalf("Failed to generate plot first time: %v", err)
 	}
 
-	// Generate plot second time (should reuse existing)
-	plot2, err := GeneratePlot(peerID, plotSize, testDir)
+	// Generate plot second time (should load existing)
+	plot2, err := GeneratePlot(peerID, testDir)
 	if err != nil {
-		t.Fatalf("Failed to generate plot second time: %v", err)
+		t.Fatalf("Failed to load existing plot: %v", err)
 	}
 
 	// Paths should be the same
 	if plot1.FilePath != plot2.FilePath {
 		t.Errorf("Plot paths differ: %s vs %s", plot1.FilePath, plot2.FilePath)
 	}
+
+	// Should have same number of entries
+	if len(plot1.Entries) != len(plot2.Entries) {
+		t.Errorf("Entry count differs: %d vs %d", len(plot1.Entries), len(plot2.Entries))
+	}
 }
 
-func TestDependencyChain(t *testing.T) {
+func TestHashGeneration(t *testing.T) {
 	privateKey, peerID := id_tools.GenerateNewPID()
 	_ = privateKey
 
-	testDir := "/tmp/pos_test_dependency"
-	defer os.RemoveAll(testDir)
+	// Test that hash generation is deterministic
+	rawValue1 := fmt.Sprintf("%x_%d", peerID, uint64(42))
+	hash1 := sha256.Sum256([]byte(rawValue1))
 
-	plotSize := int64(3 * 256 * 48)
+	rawValue2 := fmt.Sprintf("%x_%d", peerID, uint64(42))
+	hash2 := sha256.Sum256([]byte(rawValue2))
 
-	plot, err := GeneratePlot(peerID, plotSize, testDir)
-	if err != nil {
-		t.Fatalf("Failed to generate plot: %v", err)
+	if hash1 != hash2 {
+		t.Errorf("Hash generation is not deterministic")
 	}
 
-	challenge, err := GenerateChallenge(plotSize)
-	if err != nil {
-		t.Fatalf("Failed to generate challenge: %v", err)
+	// Test that different indices produce different hashes
+	rawValue3 := fmt.Sprintf("%x_%d", peerID, uint64(43))
+	hash3 := sha256.Sum256([]byte(rawValue3))
+
+	if hash1 == hash3 {
+		t.Errorf("Different indices should produce different hashes")
 	}
+}
 
-	proof, err := plot.GenerateProof(challenge)
-	if err != nil {
-		t.Fatalf("Failed to generate proof: %v", err)
+func TestPrefixMatching(t *testing.T) {
+	// Test prefix matching logic
+	hash1 := [32]byte{0b11110000, 0x00, 0x00} // First 4 bits = 1111
+	hash2 := [32]byte{0b11111111, 0x00, 0x00} // First 4 bits = 1111
+	hash3 := [32]byte{0b10110000, 0x00, 0x00} // First 4 bits = 1011
+
+	prefix := []byte{0b11110000} // Prefix = 1111
+
+	// 4-bit prefix should match hash1 and hash2
+	if !hashMatchesPrefix(hash1, 4, prefix) {
+		t.Errorf("hash1 should match 4-bit prefix 1111")
 	}
-
-	// Verify proof contains elements from multiple layers
-	layersSeen := make(map[int]bool)
-	for _, elem := range proof.ProofChain {
-		layersSeen[elem.Layer] = true
+	if !hashMatchesPrefix(hash2, 4, prefix) {
+		t.Errorf("hash2 should match 4-bit prefix 1111")
 	}
-
-	// Should have elements from layer 0 (base) at minimum
-	if !layersSeen[0] {
-		t.Errorf("Proof chain should contain base layer (layer 0) elements")
-	}
-
-	t.Logf("Proof spans %d layers", len(layersSeen))
-
-	// Verify parent references make sense
-	for _, elem := range proof.ProofChain {
-		if elem.Layer > 0 {
-			// Elements in layer > 0 should have parent references
-			if elem.ParentLeft == elem.ParentRight {
-				t.Errorf("Layer %d element has identical parents: %d", elem.Layer, elem.ParentLeft)
-			}
-		}
+	if hashMatchesPrefix(hash3, 4, prefix) {
+		t.Errorf("hash3 should not match 4-bit prefix 1111")
 	}
 }

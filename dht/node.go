@@ -3,6 +3,7 @@ package dht
 import (
 	"crypto/ecdsa"
 	"crypto/x509"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -157,7 +158,7 @@ func (n *Node) JoinNetwork(bootstrapAddr string) (Contact, error) {
 					return Contact{}, fmt.Errorf("[JOIN] Step 4/4: ✗ Join rejected: %s", ack.Message)
 				}
 			}
-			
+
 			if posMsg.Type != POS_CHALLENGE {
 				return Contact{}, fmt.Errorf("expected POS_CHALLENGE or JOIN_ACK, got %v", posMsg.Type)
 			}
@@ -629,18 +630,19 @@ func (n *Node) FindValue(key NodeID) ([]byte, int, error) {
 // InitializePosPlot generates or loads a PoS plot for this node
 func (n *Node) InitializePosPlot() error {
 	fmt.Printf("[PoS] Initializing Proof of Space plot...\n")
-	
+
+	startTime := time.Now()
 	plot, err := pos.GeneratePlot(
 		id_tools.PeerID(n.Self.ID),
-		constants.PlotSize,
-		constants.PlotDataDir,
+		constants.PosPlotDataDir,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to generate PoS plot: %w", err)
 	}
-	
+	duration := time.Since(startTime)
+
 	n.PosPlot = plot
-	fmt.Printf("[PoS] ✓ Plot initialized successfully\n")
+	fmt.Printf("[PoS] ✓ Plot initialized successfully (took %v)\n", duration.Round(time.Millisecond))
 	return nil
 }
 
@@ -649,118 +651,117 @@ func (n *Node) GeneratePosProof(challenge *PosChallengePayload) (*PosProofPayloa
 	if n.PosPlot == nil {
 		return nil, fmt.Errorf("PoS plot not initialized")
 	}
-	
-	posChallenge := &pos.Challenge{
-		Value:      challenge.ChallengeValue,
-		StartIndex: challenge.StartIndex,
-		EndIndex:   challenge.EndIndex,
-		Required:   challenge.Required,
-	}
-	
-	proof, err := n.PosPlot.GenerateProof(posChallenge)
+
+	// Search for matching hash in plot
+	proof, err := n.PosPlot.SearchMatchingHash(challenge.PrefixBits, challenge.Prefix)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate PoS proof: %w", err)
 	}
-	
-	// Convert proof elements to payload format
-	proofElements := make([]PosProofElement, len(proof.ProofChain))
-	for i, elem := range proof.ProofChain {
-		proofElements[i] = PosProofElement{
-			Layer:       elem.Layer,
-			Index:       elem.Index,
-			Value:       elem.Value,
-			ParentLeft:  elem.ParentLeft,
-			ParentRight: elem.ParentRight,
-		}
-	}
-	
+
 	return &PosProofPayload{
-		ChallengeValue: proof.Challenge,
-		StartIndex:     challenge.StartIndex,
-		EndIndex:       challenge.EndIndex,
-		Required:       challenge.Required,
-		ProofChain:     proofElements,
+		RawValue: proof.RawValue,
+		Index:    proof.Index,
+		Hash:     proof.Hash,
 	}, nil
 }
 
 // HandlePosChallenge is called by server to create a PoS challenge for joining node
 func (n *Node) HandlePosChallenge(sender Contact) (*PosChallengePayload, error) {
-	fmt.Printf("[SERVER] Creating PoS challenge for %s\n", sender.ID.String()[:16])
-	
-	challenge, err := pos.GenerateChallenge(constants.PlotSize)
+	fmt.Printf("[SERVER] Creating PoS challenge for %s (T=%d bits)\n", sender.ID.String()[:16], constants.PosPrefixBits)
+
+	challenge, err := pos.GenerateChallenge()
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate PoS challenge: %w", err)
 	}
-	
+
 	// Store challenge for verification (reuse PendingChallenges map)
+	// We store the prefix in the Nonce field for later verification
 	n.ChallengeMutex.Lock()
 	if existing, exists := n.PendingChallenges[sender.ID]; exists {
-		// Update with PoS challenge data (store in a way that we can verify later)
 		existing.Timestamp = time.Now()
+		existing.Nonce = fmt.Sprintf("%x", challenge.Prefix) // Store prefix as hex string
 		n.PendingChallenges[sender.ID] = existing
+	} else {
+		n.PendingChallenges[sender.ID] = PendingChallenge{
+			Nonce:     fmt.Sprintf("%x", challenge.Prefix),
+			Timestamp: time.Now(),
+		}
 	}
 	n.ChallengeMutex.Unlock()
-	
+
 	return &PosChallengePayload{
-		ChallengeValue: challenge.Value,
-		StartIndex:     challenge.StartIndex,
-		EndIndex:       challenge.EndIndex,
-		Required:       challenge.Required,
+		PrefixBits: challenge.PrefixBits,
+		Prefix:     challenge.Prefix,
 	}, nil
 }
 
 // HandlePosProof is called by server to verify PoS proof from joining node
 func (n *Node) HandlePosProof(sender Contact, payload PosProofPayload) (JoinAckPayload, error) {
-	fmt.Printf("[SERVER] Received PoS proof from %s (chain length: %d)\n", sender.ID.String()[:16], len(payload.ProofChain))
-	
-	// Recreate challenge from payload
-	challenge := &pos.Challenge{
-		Value:      payload.ChallengeValue,
-		StartIndex: payload.StartIndex,
-		EndIndex:   payload.EndIndex,
-		Required:   payload.Required,
+	fmt.Printf("[SERVER] Received PoS proof from %s (RawValue: %s)\n", sender.ID.String()[:16], payload.RawValue)
+
+	// Retrieve the stored challenge
+	n.ChallengeMutex.RLock()
+	pendingChallenge, exists := n.PendingChallenges[sender.ID]
+	n.ChallengeMutex.RUnlock()
+
+	if !exists {
+		return JoinAckPayload{Success: false, Message: "No pending challenge found"}, fmt.Errorf("no pending challenge")
 	}
-	
-	// Convert payload proof elements back to pos.ProofElement
-	proofChain := make([]pos.ProofElement, len(payload.ProofChain))
-	for i, elem := range payload.ProofChain {
-		proofChain[i] = pos.ProofElement{
-			Layer:       elem.Layer,
-			Index:       elem.Index,
-			Value:       elem.Value,
-			ParentLeft:  elem.ParentLeft,
-			ParentRight: elem.ParentRight,
+
+	// Check timeout (5 seconds)
+	if time.Since(pendingChallenge.Timestamp) > time.Duration(constants.PosChallengeTimeout)*time.Second {
+		n.ChallengeMutex.Lock()
+		delete(n.PendingChallenges, sender.ID)
+		n.ChallengeMutex.Unlock()
+		return JoinAckPayload{Success: false, Message: "PoS challenge timeout"}, fmt.Errorf("challenge timeout")
+	}
+
+	// Decode stored prefix from hex
+	var prefix []byte
+	var err error
+	if pendingChallenge.Nonce != "" {
+		prefix, err = hex.DecodeString(pendingChallenge.Nonce)
+		if err != nil {
+			return JoinAckPayload{Success: false, Message: "Invalid stored challenge"}, fmt.Errorf("invalid challenge: %w", err)
 		}
 	}
-	
-	proof := &pos.Proof{
-		Challenge:  payload.ChallengeValue,
-		ProofChain: proofChain,
+
+	// Recreate challenge
+	challenge := &pos.Challenge{
+		PrefixBits: uint8(constants.PosPrefixBits),
+		Prefix:     prefix,
 	}
-	
-	// Verify the proof - this checks the entire dependency chain
+
+	// Convert payload to proof
+	proof := &pos.Proof{
+		RawValue: payload.RawValue,
+		Index:    payload.Index,
+		Hash:     payload.Hash,
+	}
+
+	// Verify the proof
 	if !pos.VerifyProof(id_tools.PeerID(sender.ID), challenge, proof) {
-		fmt.Printf("[SERVER] ✗ PoS verification FAILED for %s - invalid dependency chain!\n", sender.ID.String()[:16])
-		
+		fmt.Printf("[SERVER] ✗ PoS verification FAILED for %s - invalid proof!\n", sender.ID.String()[:16])
+
 		// Clean up
 		n.ChallengeMutex.Lock()
 		delete(n.PendingChallenges, sender.ID)
 		n.ChallengeMutex.Unlock()
-		
-		return JoinAckPayload{Success: false, Message: "PoS verification failed - invalid proof chain"}, fmt.Errorf("PoS verification failed")
+
+		return JoinAckPayload{Success: false, Message: "PoS verification failed - invalid proof"}, fmt.Errorf("PoS verification failed")
 	}
-	
-	fmt.Printf("[SERVER] ✓ PoS verification PASSED for %s - valid dependency chain confirmed\n", sender.ID.String()[:16])
-	
+
+	fmt.Printf("[SERVER] ✓ PoS verification PASSED for %s - valid prefix match confirmed\n", sender.ID.String()[:16])
+
 	// Add to routing table
 	n.RoutingTable.Update(sender)
-	
+
 	// Clean up challenge
 	n.ChallengeMutex.Lock()
 	delete(n.PendingChallenges, sender.ID)
 	n.ChallengeMutex.Unlock()
-	
+
 	fmt.Printf("[SERVER] ✓ Peer %s successfully joined with PoS verification!\n", sender.ID.String()[:16])
-	
-	return JoinAckPayload{Success: true, Message: "Welcome to the DHT network (PoS verified with layered proof)!"}, nil
+
+	return JoinAckPayload{Success: true, Message: "Welcome to the DHT network (PoS verified)!"}, nil
 }
