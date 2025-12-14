@@ -31,10 +31,11 @@ type GetRequest struct {
 
 // GetResponse represents the response after retrieval
 type GetResponse struct {
-	Success bool   `json:"success"`
-	Message string `json:"message,omitempty"`
-	KeyHash string `json:"key_hash"`
-	Value   string `json:"value,omitempty"`
+	Success  bool   `json:"success"`
+	Message  string `json:"message,omitempty"`
+	KeyHash  string `json:"key_hash"`
+	Value    string `json:"value,omitempty"`
+	HopCount int    `json:"hop_count"` // Number of network hops to find the value
 }
 
 // StatusResponse represents node status information
@@ -180,13 +181,14 @@ func (s *HTTPServer) handleGet(w http.ResponseWriter, r *http.Request) {
 	fmt.Printf("[HTTP-API] Get request: key='%s' -> hash=%s\n",
 		req.Key, keyHashHex[:16])
 
-	// Retrieve from DHT
-	value, err := s.Node.FindValue(nodeID)
+	// Retrieve from DHT (with hop count)
+	value, hopCount, err := s.Node.FindValue(nodeID)
 	if err != nil {
 		resp := GetResponse{
-			Success: false,
-			Message: fmt.Sprintf("Key not found: %v", err),
-			KeyHash: keyHashHex,
+			Success:  false,
+			Message:  fmt.Sprintf("Key not found: %v", err),
+			KeyHash:  keyHashHex,
+			HopCount: hopCount,
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusNotFound)
@@ -196,10 +198,13 @@ func (s *HTTPServer) handleGet(w http.ResponseWriter, r *http.Request) {
 
 	// Success response
 	resp := GetResponse{
-		Success: true,
-		KeyHash: keyHashHex,
-		Value:   string(value),
+		Success:  true,
+		KeyHash:  keyHashHex,
+		Value:    string(value),
+		HopCount: hopCount,
 	}
+
+	fmt.Printf("[HTTP-API] ✓ Value found in %d hops\n", hopCount)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
@@ -224,7 +229,7 @@ func (s *HTTPServer) handleStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := StatusResponse{
-		NodeID:        s.Node.Self.ID.String()/*[:16] + "..."*/,
+		NodeID:        s.Node.Self.ID.String(), /*[:16] + "..."*/
 		IP:            s.Node.Self.IP,
 		Port:          s.Node.Self.Port,
 		StoredKeys:    storedKeys,
@@ -251,10 +256,10 @@ func (s *HTTPServer) handleHealth(w http.ResponseWriter, r *http.Request) {
 
 // The Handler
 func (s *HTTPServer) handleRoutingTable(w http.ResponseWriter, r *http.Request) {
-    // Enable CORS if running frontend separately
-	w.Header().Set("Access-Control-Allow-Origin", "*") 
-    w.Header().Set("Content-Type", "application/json")
-    
-    tableInfo := s.Node.GetRoutingTableInfo()
-    json.NewEncoder(w).Encode(tableInfo)
+	// Enable CORS if running frontend separately
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Content-Type", "application/json")
+
+	tableInfo := s.Node.GetRoutingTableInfo()
+	json.NewEncoder(w).Encode(tableInfo)
 }

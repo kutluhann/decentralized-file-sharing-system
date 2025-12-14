@@ -12,7 +12,7 @@ In the original implementation, when new nodes joined the DHT network, they woul
 
 We implemented a timer-based re-replication mechanism where:
 
-1. **Each stored key-value pair has its own periodic timer** (1-minute interval)
+1. **Each stored key-value pair has its own periodic timer** (10-minute interval)
 2. **Timers automatically restart** when a node receives a STORE message for that key
 3. **When a timer fires**, it calls the existing `Store()` function to re-replicate the data to the k closest nodes
 4. **As the network topology changes** (nodes join/leave), the periodic re-replication ensures entries migrate to the appropriate nodes

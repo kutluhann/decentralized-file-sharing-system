@@ -85,10 +85,8 @@ func (ls *LookupState) MarkContacted(id NodeID) {
 
 // NodeLookup performs the iterative lookup for a target ID.
 // It keeps crawling the network until it finds the k closest nodes.
-//
-// TODO: Currently uses direct handler calls for testing. In production,
-// this should use Network.SendFindNode() for actual RPC over UDP.
-func (n *Node) NodeLookup(targetID NodeID) []Contact {
+// Returns: closest contacts, number of hops (FIND_NODE queries made)
+func (n *Node) NodeLookup(targetID NodeID) ([]Contact, int) {
 	// 1. INITIALIZATION
 	// Start with the closest nodes we know locally.
 	localCandidates := n.RoutingTable.GetClosestNodes(targetID, constants.K)
@@ -98,6 +96,7 @@ func (n *Node) NodeLookup(targetID NodeID) []Contact {
 	fmt.Printf("[LOOKUP] Starting with %d local candidates\n", len(localCandidates))
 
 	state := NewLookupState(targetID, localCandidates)
+	hopCount := 0 // Track number of FIND_NODE queries
 
 	// 2. THE MAIN LOOP
 	// We keep going until we run out of new people to ask.
@@ -112,10 +111,11 @@ func (n *Node) NodeLookup(targetID NodeID) []Contact {
 		}
 
 		// B. NETWORK CALL (RPC)
-		fmt.Printf("[LOOKUP] Querying %s:%d for nodes closer to target\n",
-			candidate.IP, candidate.Port)
+		fmt.Printf("[LOOKUP] Querying %s:%d for nodes closer to target (hop %d)\n",
+			candidate.IP, candidate.Port, hopCount+1)
 
 		// Send FIND_NODE RPC over UDP
+		hopCount++ // Increment hop count for each FIND_NODE query
 		newNodes, err := n.Network.SendFindNode(*candidate, targetID)
 
 		// Mark as contacted regardless of success/fail to avoid loops
@@ -139,21 +139,22 @@ func (n *Node) NodeLookup(targetID NodeID) []Contact {
 		for _, receivedNode := range newNodes {
 			if receivedNode.ID == targetID {
 				// Found it! Return just this one.
-				fmt.Printf("[LOOKUP] ✓ Found exact target node: %s\n", receivedNode.ID.String()[:16])
-				return []Contact{receivedNode}
+				fmt.Printf("[LOOKUP] ✓ Found exact target node: %s (hops: %d)\n",
+					receivedNode.ID.String()[:16], hopCount)
+				return []Contact{receivedNode}, hopCount
 			}
 		}
 	}
 
 	// 3. RETURN RESULTS
 	// Return the top K nodes from our sorted shortlist
-	fmt.Printf("[LOOKUP] Lookup complete, returning %d closest nodes\n",
-		min(len(state.Shortlist), constants.K))
+	fmt.Printf("[LOOKUP] Lookup complete, returning %d closest nodes (hops: %d)\n",
+		min(len(state.Shortlist), constants.K), hopCount)
 
 	if len(state.Shortlist) > constants.K {
-		return state.Shortlist[:constants.K]
+		return state.Shortlist[:constants.K], hopCount
 	}
-	return state.Shortlist
+	return state.Shortlist, hopCount
 }
 
 // Helper function for min

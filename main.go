@@ -110,9 +110,9 @@ func main() {
 		// This is the core of Kademlia's bootstrap: by looking up our own ID,
 		// we populate the buckets closest to us, which are the most important.
 		fmt.Printf("[JOIN] Performing self-lookup to populate routing table\n")
-		closestNodes := node.NodeLookup(node.Self.ID)
+		closestNodes, lookupHops := node.NodeLookup(node.Self.ID)
 
-		fmt.Printf("[JOIN] ✓ Bootstrap complete. Found %d nodes close to self\n", len(closestNodes))
+		fmt.Printf("[JOIN] ✓ Bootstrap complete. Found %d nodes close to self (hops: %d)\n", len(closestNodes), lookupHops)
 
 		fmt.Println("✓ Successfully joined the network!")
 	}
