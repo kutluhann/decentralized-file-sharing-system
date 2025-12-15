@@ -38,3 +38,6 @@ private_key.pem
 sim_data/
 
 .node_counter
+
+decentralized-file-sharing-system
+dht-node

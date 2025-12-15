@@ -61,6 +61,13 @@ func main() {
 
 	fmt.Printf("Node initialized with ID: %s\n", node.Self.ID.String())
 
+	// Initialize Proof of Space plot for Sybil resistance
+	fmt.Println("Initializing Proof of Space...")
+	if err := node.InitializePosPlot(); err != nil {
+		log.Fatalf("Failed to initialize PoS plot: %v", err)
+	}
+	fmt.Println("✓ Proof of Space ready")
+
 	// Start UDP network listener for DHT protocol
 	go network.Listen()
 
