@@ -19,8 +19,8 @@ services:
       - bootstrap
     
     ports:
-      - "10000-11800:8080/udp"
-      - "12000-13800:8000"
+      - "8080/udp"
+      - "8000"
     
     restart: unless-stopped
 

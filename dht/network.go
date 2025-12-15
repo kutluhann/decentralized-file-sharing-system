@@ -185,7 +185,7 @@ func (s *Network) handlePacket(data []byte, addr *net.UDPAddr) {
 			s.sendResponse(msg.RPCID, JOIN_ACK, JoinAckPayload{Success: false, Message: err.Error()}, addr)
 			return
 		}
-		
+
 		// Signature verified, now send PoS challenge
 		if handler, ok := s.Handler.(interface {
 			HandlePosChallenge(sender Contact) (*PosChallengePayload, error)
