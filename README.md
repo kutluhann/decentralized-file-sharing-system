@@ -30,16 +30,34 @@ docker-compose down -v
 
 ### Usage
 
-Store value:
+Store value (can be sent to any node):
 ```bash
 curl -X POST http://localhost:8000/store \
   -H "Content-Type: application/json" \
   -d '{"key":"myfile","value":"data"}'
 ```
 
-Get value:
+Get value (can be sent to any node):
 ```bash
 curl -X POST http://localhost:8000/get \
   -H "Content-Type: application/json" \
   -d '{"key":"myfile"}'
+```
+
+### File Storage Service
+
+```bash
+cd file-storage
+yarn
+yarn start
+```
+
+Runs on port 4000 by default.
+
+### Client App (Electron)
+
+```bash
+cd client-app
+yarn
+yarn start
 ```
