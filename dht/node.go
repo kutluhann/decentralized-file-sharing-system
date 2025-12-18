@@ -235,7 +235,7 @@ func (n *Node) HandleFindNode(sender Contact, targetID NodeID) []Contact {
 	n.RoutingTable.Update(sender)
 
 	// Get closest nodes from routing table
-	allNodes := n.RoutingTable.GetClosestNodes(targetID, 20)
+	allNodes := n.RoutingTable.GetClosestNodes(targetID, constants.K)
 
 	// Filter out the sender (they already know about themselves)
 	var nodes []Contact
@@ -346,7 +346,7 @@ func (n *Node) HandleFindValue(sender Contact, key NodeID) ([]byte, []Contact) {
 	// Don't have it - return closest nodes who might have it
 	fmt.Printf("[SERVER] ✗ Key %s not found locally, returning closest nodes to %s\n",
 		key.String()[:16], sender.ID.String()[:16])
-	return nil, n.RoutingTable.GetClosestNodes(key, 20)
+	return nil, n.RoutingTable.GetClosestNodes(key, constants.K)
 }
 
 // BucketInfo represents a single bucket for JSON output
@@ -555,7 +555,7 @@ func (n *Node) FindValue(key NodeID) ([]byte, int, error) {
 	fmt.Printf("[DHT-FIND] Not found locally, starting iterative FIND_VALUE lookup...\n")
 
 	// 2. Initialize lookup state with closest known nodes
-	localCandidates := n.RoutingTable.GetClosestNodes(key, 20) // K=20
+	localCandidates := n.RoutingTable.GetClosestNodes(key, constants.K)
 	if len(localCandidates) == 0 {
 		return nil, 0, fmt.Errorf("key not found: no nodes in network")
 	}
