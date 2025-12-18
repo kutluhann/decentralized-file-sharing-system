@@ -119,8 +119,10 @@ getBtn.addEventListener('click', async () => {
     });
 
     if (!dhtResult.success) {
+      const errorHopCount = dhtResult.data?.hop_count !== undefined ? dhtResult.data.hop_count : 0;
       showStatus(getStatus, 'error', 
         `File not found in DHT: ${dhtResult.error}<br>` +
+        `<strong>Hop count:</strong> ${errorHopCount}<br>` +
         `${dhtResult.response ? JSON.stringify(dhtResult.response) : ''}`);
       getBtn.disabled = false;
       return;
@@ -128,8 +130,9 @@ getBtn.addEventListener('click', async () => {
 
     // The value should be the same as the key (file hash)
     const storageAddress = dhtResult.data.value;
+    const hopCount = dhtResult.data.hop_count !== undefined ? dhtResult.data.hop_count : 0;
     showStatus(getStatus, 'info', 
-      `Found in DHT! Fetching file metadata...`);
+      `Found in DHT! Hop count: ${hopCount}<br>Fetching file metadata...`);
 
     // Step 2: Get file metadata to extract original filename
     const metadataResult = await window.electronAPI.getFileMetadata({
@@ -212,6 +215,7 @@ getBtn.addEventListener('click', async () => {
       `<strong>Saved to:</strong> ${saveResult.savedPath}<br>` +
       `<strong>Size:</strong> ${formatBytes(downloadResult.size)}<br>` +
       `<strong>Hash verified:</strong> ✓<br>` +
+      `<strong>Hop count:</strong> ${hopCount}<br>` +
       `<strong>Storage Address:</strong> <div class="hash-display">${storageAddress}</div>`);
 
   } catch (error) {

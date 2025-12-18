@@ -145,7 +145,8 @@ ipcMain.handle('get-from-dht', async (event, { dhtNodeUrl, key }) => {
     return {
       success: false,
       error: error.message,
-      response: error.response?.data
+      response: error.response?.data,
+      data: error.response?.data // Include data for hop_count in error case
     };
   }
 });
