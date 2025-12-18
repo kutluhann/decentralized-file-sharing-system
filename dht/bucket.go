@@ -42,9 +42,6 @@ func (b *Bucket) Update(contact Contact) {
 		b.contacts = append(b.contacts, contact)
 		return
 	}
-
-	// TODO: PingHeadNode() and remove head node if it doesn't respond
-	// TODO: Implement eviction policy (?)
 }
 
 func (b *Bucket) GetContacts() []Contact {
