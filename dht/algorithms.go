@@ -62,7 +62,13 @@ func (ls *LookupState) Sort() {
 
 // PickNextBest returns the closest node that has NOT been queried yet.
 func (ls *LookupState) PickNextBest() *Contact {
-	for i := range ls.Shortlist {
+	limit := constants.K
+
+	if len(ls.Shortlist) < limit {
+		limit = len(ls.Shortlist)
+	}
+
+	for i := 0; i < limit; i++ {
 		// We use a pointer so we return the actual object
 		c := &ls.Shortlist[i]
 
