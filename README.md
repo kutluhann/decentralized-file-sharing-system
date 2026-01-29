@@ -2,6 +2,11 @@
 
 DHT implementation with ECDSA authentication and Proof of Space Sybil resistance.
 
+## System Architecture
+
+<img width="2884" height="2164" alt="image" src="https://github.com/user-attachments/assets/b437301e-c498-4cf7-996d-f6c8d7f76c6e" />
+
+
 ## How to Run
 
 ### Local Setup
